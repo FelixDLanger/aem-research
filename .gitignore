@@ -1,0 +1,13 @@
+# Raw and cached data never belong in this repository (vendor licences, size).
+data/
+cache/
+output/
+*.parquet
+*.pkl
+*.zip
+*.gz
+*.csv
+
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
