@@ -1,0 +1,118 @@
+# Paper A – regime-conditional value creation in US take-private buyouts (draft).
+# Hashed like the Paper B config; config/paper_a_LOCK.json locks it. Notebook 02 reads it.
+# Until the lock, the notebook reports counts and entry-side data only (A2).
+
+study:
+  name: Regime-conditional value creation in US take-private buyouts
+  short_name: Paper A
+  version: "0.1"
+  status: draft
+  author: Felix D. Langer (ORCID 0009-0000-3205-8088)
+  shares_with: >-
+    config/preregistration.yaml (Paper B) – the regime moderators (D7), the EDGAR caches
+    and the XBRL engine
+  method_reference: >-
+    Guo, Hotchkiss and Song (2011), Do Buyouts (Still) Create Value?, Journal of
+    Finance 66(2), 479-517 – public-to-private buyouts identified and measured from SEC
+    filings
+
+decisions:
+  - id: A1
+    topic: data sources
+    status: agreed by Felix on Nov 6, 2026
+    decision: >-
+      The core sample comes from SEC filings, so every number is public and replicable.
+      PCRI's deal-level database checks scale (holding periods and exit routes by
+      vintage); WSIB's quarterly fund table gives net returns by vintage. Data cost:
+      zero.
+  - id: A2
+    topic: blinding
+    status: proposed by Claude on Nov 6, 2026 (the Paper B rule)
+    decision: >-
+      Until this file is locked, notebook 02 shows counts and entry-side data only. Exit
+      values, value-creation components and fund returns are not computed or shown; the
+      raw inputs (WSIB tables included) are cached for after the lock.
+  - id: A3
+    topic: unplanned findings
+    status: Paper B's D9 applies unchanged
+    decision: >-
+      Surprises are welcome, reported as exploratory with every analysis tried, and
+      confirmed on data they were not found in before they are stated as findings.
+
+review_before_lock:
+  - >-
+    Run notebook 02 once (counts only) and check, by announcement year, how many deals
+    have entry financials, an offer price and a visible exit; then fix the sample rules
+    below.
+  - >-
+    Hand-check 30 randomly drawn deals' extracted terms (offer price, equity and debt
+    commitments, sponsor) against the filings; target 90% correct before the terms are
+    used.
+  - >-
+    Agree the hypotheses below with Felix (drafted by Claude on Nov 6, 2026), then set
+    study.status to final.
+
+hypotheses:
+  - id: A-H1
+    tier: draft
+    statement: >-
+      For take-privates entered before 2022, multiple expansion accounts for a larger
+      share of equity value creation than for deals entered in 2022 or later.
+  - id: A-H2
+    tier: draft
+    statement: >-
+      Deal-level multiple change tracks the public small-cap benchmark's multiple change
+      between entry and exit; the remainder is the deal-specific part.
+  - id: A-H3
+    tier: draft
+    statement: >-
+      Holding periods lengthen and re-IPO exits become rarer for exits after 2021.
+
+sample:
+  announce_years: [2012, 2026]
+  search:
+    query: '"equity commitment letter" OR "equity commitment letters"'
+    forms: [DEFM14A, DEFM14C, PREM14A, PREM14C, SC 14D9, SC 13E3]
+    why: a sponsor's equity commitment marks sponsor-backed deals; strategic buyers rarely need one
+  deal_gap_months: 18
+  completion_window_months: 18
+  current_filer_months: 15
+  value_bridge_excludes_sic: [6000, 6799]     # banks, insurers, REITs: EBITDA is not meaningful
+
+entry:
+  date: the first target-side merger filing (proxy, information statement, 14D-9 or 13E-3)
+  financials: the latest 10-K or 10-Q filed before that date (XBRL, point in time)
+  ebitda: >-
+    trailing operating income plus depreciation and amortization; amortization of
+    intangibles added when only depreciation is tagged; pre-tax income plus interest
+    as the fallback
+  enterprise_value: offer price × cover-page shares + debt − cash
+  leverage: largest debt amount committed / entry EBITDA (approximate, hand-checked)
+
+exits:
+  routes:
+    - still files 10-Ks or 10-Qs more than 90 days after completion (registered debt) – post-buyout financials
+    - re-IPO – an S-1 or 424B filing more than 180 days after completion under a matching name
+    - sold to a listed buyer – an 8-K "completion of acquisition" naming the target, more than 180 days after completion
+    - not visible
+  still_files_days: 90
+  exit_days: 180
+  values: computed only after the lock (A2)
+
+benchmark:
+  public: median EV/EBITDA and EV/revenue of the Paper B universe (US$100m–2bn) at each quarterly start date
+
+regime:
+  moderators: Paper B D7 (real yield, 2-year tightening, Baa spread, CPI inflation), measured at entry and at exit
+  primary_split: entry before 2022 vs 2022 or later
+
+wsib:
+  first_year: 2016
+  url: https://www.sib.wa.gov/docs/reports/quarterly/ir{mmddyy}.pdf
+  strategies_of_interest: [Corporate Finance/Buyout]
+  outcome_columns_hidden_until_lock: [market_value, distributed, total_value, multiple_printed, gain, net_irr, tvpi]
+
+pcri:
+  status: >-
+    application to draft – a 2-3 page proposal; analysis in NORC's remote enclave, with
+    aggregated output of at least 100 observations

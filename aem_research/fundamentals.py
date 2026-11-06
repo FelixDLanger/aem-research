@@ -144,8 +144,26 @@ def _dei_shares(prep: dict, cutoff: pd.Timestamp) -> pd.DataFrame:
     return out
 
 
-def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15) -> pd.DataFrame:
-    """Fundamentals known before `cutoff` for every current filer."""
+def restrict(prep: dict, ciks) -> dict:
+    """The prepared facts of these companies only (order kept): a fast path for a few firms."""
+    keep = pd.Index(pd.unique(np.asarray(list(ciks), dtype="int64")))
+    out = {}
+    for key in ("plain", "dims", "dei"):
+        d = prep[key]
+        d = d[d["cik"].astype("int64").isin(keep)].reset_index(drop=True)
+        out[key] = d
+        out[f"{key}_filed"] = d["filed"].to_numpy(dtype="datetime64[ns]")
+    return out
+
+
+def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15,
+             extra_flows: tuple = ()) -> pd.DataFrame:
+    """Fundamentals known before `cutoff` for every current filer.
+
+    `extra_flows` adds trailing-twelve-month columns for more tag groups (Paper A:
+    operating_income, dna, amortization, interest_expense), each with the tag used at
+    the anchor period in `<group>_tag`; the default output is unchanged.
+    """
     cutoff = pd.Timestamp(cutoff)
     a = _anchors(subs, cutoff, current_months)
     if a.empty:
@@ -158,6 +176,10 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
     for g in FLOW_GROUPS:
         out[g] = _ttm(look, g, cik, P, k)
         out[f"{g}_prev"] = _ttm(look, g, cik, P, k, back=1)
+    for g in (x for x in extra_flows if x not in FLOW_GROUPS):
+        out[g] = _ttm(look, g, cik, P, k)
+        out[f"{g}_prev"] = _ttm(look, g, cik, P, k, back=1)
+        out[f"{g}_tag"] = look.get(g, cik, P, k, what="tags")
     for g in BALANCE_GROUPS:
         out[g] = look.get(g, cik, P, 0)
     debt_current_tag = look.get("debt_current", cik, P, 0, what="tags")
@@ -210,14 +232,14 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
 
 
 def snapshots(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15,
-              log=None) -> pd.DataFrame:
-    prep = prepare(facts)
+              log=None, extra_flows: tuple = (), prep: dict | None = None) -> pd.DataFrame:
+    prep = prep if prep is not None else prepare(facts)
     subs = subs.copy()
     subs["filed"] = pd.to_datetime(subs["filed"]).astype("datetime64[ns]")
     subs["period"] = pd.to_datetime(subs["period"]).astype("datetime64[ns]")
     parts = []
     for c in cutoffs:
-        snap = snapshot(prep, subs, c, current_months=current_months)
+        snap = snapshot(prep, subs, c, current_months=current_months, extra_flows=extra_flows)
         if len(snap):
             parts.append(snap)
         if log:

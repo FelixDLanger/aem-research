@@ -5,3 +5,4 @@ requests>=2.28
 pytest>=7.0
 # optional: pyarrow (parquet caches; preinstalled on Colab)
 # optional: openpyxl or xlsxwriter (Excel export; openpyxl is preinstalled on Colab)
+# optional: pdfplumber (notebook 02 installs it for WSIB's PDF reports)

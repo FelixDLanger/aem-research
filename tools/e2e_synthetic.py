@@ -156,6 +156,8 @@ if FULL:
         qe = pd.date_range("2010-03-31", "2025-09-30", freq="QE")
         flows = {"ocf": rng.normal(4e6, 3e6, len(qe)), "capex": np.abs(rng.normal(1e6, 3e5, len(qe))),
                  "rev": np.abs(rng.normal(30e6, 5e6, len(qe)))}
+        flows["opinc"] = flows["rev"] * 0.12                   # Paper A: EBITDA inputs (no extra random draws,
+        flows["dna"] = flows["rev"] * 0.05                     # so the rest of the synthetic data is unchanged)
         flows = {k: pd.Series(v, index=qe) for k, v in flows.items()}
         wad = pd.Series(5e7 * (1 + 0.01 * np.arange(len(qe)) / 4), index=qe)
         for k_, P in enumerate(qe):
@@ -176,7 +178,8 @@ if FULL:
                 ytd = slice(fy_start, P_)
                 q = 4 if k == 4 else k
                 for tag, key in (("NetCashProvidedByUsedInOperatingActivities", "ocf"),
-                                 ("PaymentsToAcquirePropertyPlantAndEquipment", "capex"), ("Revenues", "rev")):
+                                 ("PaymentsToAcquirePropertyPlantAndEquipment", "capex"), ("Revenues", "rev"),
+                                 ("OperatingIncomeLoss", "opinc"), ("DepreciationDepletionAndAmortization", "dna")):
                     nums.append(num_row(adsh, tag, f"{P_:%Y%m%d}", q, round(float(flows[key][ytd].sum()), 0)))
                 nums.append(num_row(adsh, "WeightedAverageNumberOfDilutedSharesOutstanding", f"{P_:%Y%m%d}",
                                     1 if k < 4 else 4, round(float(wad[P_]), 0), "shares"))

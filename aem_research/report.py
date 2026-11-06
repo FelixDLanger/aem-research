@@ -55,6 +55,14 @@ def paste_block(report: dict) -> str:
         lines.append("POWER     " + " · ".join(f"{k} {x}" for k, x in row.items()))
     for row in r.get("base_rates") or []:
         lines.append("RESULT    " + " · ".join(f"{k} {x}" for k, x in row.items()))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
+def _run_lines(r: dict) -> list[str]:
+    """Phases, time, memory, warnings and errors – the audit trail shared by both papers."""
+    lines = []
     run = r.get("run") or {}
     if run.get("phases"):
         lines.append("PHASES    " + " · ".join(f"{p['phase']} {p['status']} {p['seconds']}s" for p in run["phases"]))
@@ -77,6 +85,32 @@ def paste_block(report: dict) -> str:
                 lines.append(f"          {w}")
     else:
         lines.append("ERRORS    none")
+    return lines
+
+
+def _items(d: dict) -> str:
+    return " · ".join(f"{k.replace('_', ' ')} {_pct(x) if isinstance(x, float) and abs(x) <= 1 else x}"
+                      for k, x in d.items())
+
+
+def paper_a_block(report: dict) -> str:
+    """Paper A's paste block: inputs, search, deals, entry coverage, exit routes, WSIB – counts only."""
+    r = report
+    lines = [
+        "PAPER A RUN SUMMARY – paste everything between the rulers into the chat",
+        "=" * 72,
+        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · config A {str(r.get('config_sha256', ''))[:12]} "
+        f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
+    ]
+    for key, label in (("inputs", "INPUTS    "), ("index", "INDEX     "), ("search", "SEARCH    "),
+                       ("deals", "DEALS     "), ("entry", "ENTRY     "), ("exits", "EXITS     "),
+                       ("by_year", "BY YEAR   "), ("bench", "BENCH     "), ("regime", "REGIME    "),
+                       ("wsib", "WSIB      ")):
+        if r.get(key):
+            lines.append(label + (_items(r[key]) if isinstance(r[key], dict) else str(r[key])))
+        elif key in ("inputs", "search", "deals"):
+            lines.append(label + "not reached")
+    lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)
 

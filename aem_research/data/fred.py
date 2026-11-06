@@ -124,6 +124,6 @@ def regime_at(series: dict, formation_dates) -> pd.DataFrame:
             a, b = cpi.get(m, np.nan), cpi.get(m - pd.DateOffset(years=1), np.nan)
             row["inflation_cpi_yoy"] = float(a / b - 1) if np.isfinite(a) and np.isfinite(b) and b else np.nan
         rows.append(row)
-    out = pd.DataFrame(rows)
+    out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["start_date"])
     out["start_date"] = pd.to_datetime(out["start_date"]).astype("datetime64[ns]")
     return out

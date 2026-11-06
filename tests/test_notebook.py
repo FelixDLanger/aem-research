@@ -43,3 +43,31 @@ def test_gitignore_cannot_hide_package_code():
         if rule.endswith("/") and not rule.startswith("/"):
             assert rule.rstrip("/") not in code_dirs, f".gitignore rule {rule!r} would hide a code folder"
     assert (ROOT / "aem_research" / "data" / "fsds.py").exists()
+
+
+NOTEBOOK_A = ROOT / "notebooks" / "02_paper_a_take_private_sample.ipynb"
+
+
+def test_paper_a_notebook_is_valid_and_compiles():
+    nb = json.loads(NOTEBOOK_A.read_text(encoding="utf-8"))
+    assert nb["nbformat"] == 4 and nb["nbformat_minor"] >= 5
+    ids = [c["id"] for c in nb["cells"]]
+    assert len(ids) == len(set(ids))
+    codes = [c for c in nb["cells"] if c["cell_type"] == "code"]
+    assert len(codes) >= 10
+    for i, cell in enumerate(codes):
+        src = "".join(cell["source"])
+        assert cell["outputs"] == [] and cell["execution_count"] is None
+        assert not re.search(r"^\s*[!%]", src, flags=re.M), f"code cell {i} uses shell or magic syntax"
+        compile(src, f"cell-{i}", "exec")
+    text = NOTEBOOK_A.read_text(encoding="utf-8")
+    assert "paper_a_LOCK.json" in text and "@" not in "".join("".join(c["source"]) for c in codes if "User-Agent" in "".join(c["source"]))
+
+
+def test_notebooks_match_their_builders(tmp_path):
+    import subprocess
+    import sys
+    for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A)):
+        out = tmp_path / nb.name
+        subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
+        assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
