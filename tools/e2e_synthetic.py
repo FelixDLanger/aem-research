@@ -1,7 +1,7 @@
 """End-to-end check: build a synthetic Drive, then execute every notebook code cell in order.
 
 Usage (outside Colab, no network):
-    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked|broken]
+    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked|broken|testsfail]
 Scenarios:
   full           SimFin with CIKs and ISINs, a Stooq zip, SEC index caches, and the SEC data
                  sets (XBRL, Form 4, 13F) as hand-downloaded zips in data/sec/manual
@@ -9,10 +9,15 @@ Scenarios:
   empty          no data at all
   locked         as full, on a copy of the repo whose pre-registration is finalized and
                  locked, so Phase E computes outcomes
-  broken         as full, plus a truncated 13F zip and a corrupt FRED file: the run must
-                 finish, skip the bad zip, and report the FRED failure in the paste block
+  broken         as full, plus a truncated Stooq zip, a truncated 13F zip and a corrupt FRED
+                 file: the run must finish, report Phase B as failed with what to do, skip the
+                 bad 13F zip, keep the other FRED series, and list all three in the paste block
+  testsfail      as full, on a copy of the repo with one planted failing test: the run must
+                 stop at the test cell and print the paste block with the failing test
 Every scenario must finish with exit code 0.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -28,7 +33,7 @@ import pandas as pd
 SCRATCH = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SCENARIO = sys.argv[3] if len(sys.argv) > 3 else "full"
-FULL = SCENARIO in ("full", "locked", "broken")
+FULL = SCENARIO in ("full", "locked", "broken", "testsfail")
 DRIVE = SCRATCH / "drive"
 shutil.rmtree(DRIVE, ignore_errors=True)
 rng = np.random.default_rng(42)
@@ -275,6 +280,8 @@ if FULL:
         bad = sorted(manual.glob("*_form13f.zip"))[3]
         bad.write_bytes(bad.read_bytes()[:500])                  # a truncated download
         (fred_dir / "BAA10Y.csv").write_text("not a csv at all")  # a corrupt hand-saved file
+        stz = stq_dir / "d_us_txt.zip"
+        stz.write_bytes(stz.read_bytes()[:2000])                 # an interrupted browser download
 
 # ---------- locked scenario: a copy of the repo with a finalized, locked pre-registration
 if SCENARIO == "locked":
@@ -288,6 +295,15 @@ if SCENARIO == "locked":
     subprocess.run([sys.executable, "-c", script], cwd=copy, check=True)
     REPO = copy
 
+# ---------- testsfail scenario: a copy of the repo with one planted failing test
+if SCENARIO == "testsfail":
+    copy = SCRATCH / "repo_testsfail"
+    shutil.rmtree(copy, ignore_errors=True)
+    shutil.copytree(REPO, copy, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+    (copy / "tests" / "test_zz_planted_failure.py").write_text(
+        "def test_planted_failure():\n    assert 1 == 2, 'planted by e2e testsfail'\n")
+    REPO = copy
+
 # ---------- execute the notebook's code cells in order
 os.environ.update(AEM_DRIVE_ROOT=str(DRIVE), AEM_REPO_DIR=str(REPO), AEM_SEC_OFFLINE="1")
 nb = json.loads((REPO / "notebooks" / "01_aem_base_rate_skeleton.ipynb").read_text())
@@ -295,7 +311,25 @@ ns = {"__name__": "__main__"}
 t0 = time.time()
 for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
     print(f"\n======== code cell {i} ========")
-    exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    if SCENARIO != "testsfail":
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+        continue
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    except RuntimeError as exc:                       # Colab's Run all stops at the first exception
+        printed = buf.getvalue()
+        print(printed)
+        assert "Test suite failed – FAILED tests/test_zz_planted_failure.py::test_planted_failure" in str(exc), exc
+        assert "AEM RUN SUMMARY" in printed and "0 tests STOPPED" in printed, "no paste block at the stop"
+        assert "ERROR     [0 tests] RuntimeError: Test suite failed – FAILED tests/test_zz_planted_failure.py" in printed
+        assert "paths" not in ns, "cells after the failed tests must not run"
+        print(f"\nSTOPPED AT THE TEST CELL AS INTENDED ({type(exc).__name__}) in {time.time() - t0:.1f}s")
+        sys.exit(0)
+    print(buf.getvalue())
+if SCENARIO == "testsfail":
+    raise SystemExit("the planted failing test did not stop the run")
 print(f"\nALL CELLS OK in {time.time() - t0:.1f}s")
 report = json.loads((DRIVE / "aem-research" / "output" / "coverage_report.json").read_text())
 print(json.dumps(report["verdict"], indent=1))
@@ -304,12 +338,19 @@ if FULL:
     print("prelock:", report["prelock"])
 summary_text = (DRIVE / "aem-research" / "output" / "run_summary.txt").read_text()
 print(summary_text)
+progress = (DRIVE / "aem-research" / "output" / "run_progress.txt").read_text()
+assert "=== run started" in progress and "=== run finished" in progress and "start F features" in progress
 if SCENARIO == "broken":
-    assert "ERROR     [F regime]" in summary_text, "the FRED failure is missing from the paste block"
+    assert "ERROR     [B Stooq] ValueError: d_us_txt.zip is not a complete zip" in summary_text, "Stooq failure missing"
+    assert "download it again" in summary_text
+    assert "WARNING   [F regime] FRED BAA10Y missing, so credit_spread_baa is not computed" in summary_text
+    assert "BAA10Y missing (manual BAA10Y.csv unreadable" in summary_text
+    assert "real_yield_10y" in summary_text and "credit_spread_baa" not in summary_text.split("REGIME")[1].split("\n")[0]
     assert "1 bad" in summary_text and "(bad " in summary_text, "the truncated 13F zip was not reported"
-    assert report.get("features"), "a bad 13F zip must not stop the features"
+    assert report.get("features"), "a bad Stooq or 13F zip must not stop the features"
+    assert "end   B Stooq: FAILED" in progress
 elif FULL:
-    assert "ERRORS    none" in summary_text, "unexpected errors in a clean run"
+    assert "ERRORS    none" in summary_text and "WARNING" not in summary_text, "unexpected problems in a clean run"
 if SCENARIO == "locked":
     out = ns["result"]
     assert len(out) and set(out["status"]) <= {"complete", "delisted", "series_ended", "censored", "no_entry"}

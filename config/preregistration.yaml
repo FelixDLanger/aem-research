@@ -67,6 +67,7 @@ decisions:
       routine and unclassified insiders reported separately.
   - id: D7
     topic: macro regime
+    status: proposed by Claude on Nov 6, 2026, in answer to Felix's question on rates and inflation; Felix confirms it at the lock
     decision: >-
       The 2022 split stays the primary regime definition. Six exploratory moderators,
       each measured at the start date, test the mechanisms behind it: the 10-year real
@@ -74,6 +75,20 @@ decisions:
       Baa credit spread (refinancing and distress), CPI inflation, the universe's median
       drawdown (market stress) and its median free-cash-flow yield (starting valuation).
       The same regime variables feed Paper A.
+  - id: D8
+    topic: regime confirmation and yearly updates
+    status: proposed by Claude on Nov 6, 2026; Felix confirms it at the lock
+    decision: >-
+      The locked sample has complete windows after 2021 only at the 3-year horizon, from
+      eight start dates in two calendar years, so H5 can find a regime difference but
+      cannot confirm it. Each year, the start dates whose 3-year windows have completed
+      since the lock are added (2024 in 2027, 2025 in 2028) as a pre-announced update:
+      the same code, a re-lock noted "D8 update", the original lock kept in the history.
+      A difference found in the locked sample is tested once, after the October 2025
+      start date's window closes, one-sided in the direction found, on the 2024 and 2025
+      start dates only – data nobody had seen at the lock, and an arm the same size as
+      2022–2023. Until it passes, the terminal uses the pooled base rates and shows the
+      regime rates beside them.
 
 review_before_lock:
   - >-
@@ -82,6 +97,8 @@ review_before_lock:
     date, and that fewer than 25% of ended series fall into the "unknown" delisting
     class. Review the power table (smallest detectable likelihood ratio per cohort). If
     a check fails, fix the definition here before locking.
+  - >-
+    Felix confirms D7 and D8 (proposed by Claude on Nov 6, 2026) or changes them.
 
 hypotheses:
   - id: H1
@@ -160,7 +177,8 @@ hypotheses:
       credit spread, CPI inflation, the universe's median drawdown and its median
       free-cash-flow yield. Macro variables vary only across start dates, so inference
       resamples calendar years, not firms. Low power by construction; reported as
-      exploratory only.
+      exploratory only. A difference found here is a hypothesis, which D8 tests once on
+      start dates added after the lock.
   - id: H6
     tier: exploratory
     type: exploratory
@@ -176,6 +194,10 @@ regime:
     real_yield_10y: {source: FRED DFII10, rule: last daily value before the start date}
     tightening_2y_12m: {source: FRED DGS2, rule: 2-year yield change over the 12 months before the start date}
     credit_spread_baa: {source: FRED BAA10Y, rule: last daily value before the start date}
+    # CPIAUCNS: BLS publishes the unadjusted CPI-U as final when issued, on the 1982-84
+    # base throughout the sample, so no vintages and no splice are needed. The market
+    # series (DFII10, DGS2, BAA10Y) are observed on the day. BAA10Y is Moody's
+    # copyrighted data: it stays on Drive and is never committed.
     inflation_cpi_yoy: {source: FRED CPIAUCNS, rule: 12-month change of the index two months before the start month, the latest release on the start date}
     market_stress: universe median drawdown from the 3-year high on the start date
     valuation_fcf_yield: universe median trailing free cash flow over market cap on the start date
@@ -185,6 +207,14 @@ regime:
     delistings, which should favor the net-cash, cash-generating fallen-quality cohort.
     Starting valuation and market stress set how much rebound is available.
   inference: year-block bootstrap (the four start dates of a calendar year resampled together)
+  update:
+    cadence: yearly, as 3-year windows complete (D8)
+    adds: start dates whose 3-year windows have completed since the lock (2024 in 2027, 2025 in 2028)
+    confirmation: >-
+      once, after the October 2025 start date's 3-year window closes (November 2028),
+      one-sided at 5% in the direction found in the locked sample, on the 2024 and 2025
+      start dates only, with year-block intervals
+    terminal: pooled base rates until the confirmation passes; regime rates shown beside them
 
 analysis_hierarchy: >-
   H1 and H2 (H2a and H2b, Holm-corrected) are primary and are the only results that
@@ -386,10 +416,15 @@ estimation:
     - without the April and July 2020 start dates, formed at the COVID trough (as AEM-2 v2.6 flags the 2009 trough)
     - multiples in real terms (the touch threshold rises with CPI from entry)
     - insider-sale placebo for H2 (see H2 placebo)
+    - likelihood-ratio intervals with start years resampled as well as firms, because shocks such as 2020-2021 hit many firms at once
+  descriptives:
+    - the calendar year of each first 3x and 10x touch, to show how much of a base rate comes from one episode such as 2020-2021
+    - delisting classes (merger, performance, unknown) by start year and regime, since tightening should raise performance delistings
   outputs_to_terminal: >-
     The measured five-year bucket shares replace the K1d placeholder (23 / 25 / 27 / 16 /
     6 / 3%), P(touch 10x within 5 years) replaces the 3% prior, and the test-period
     likelihood ratios are set against the asserted table (2.0 / 1.3 / 0.8 / 0.6).
+    Regime-specific rates replace the pooled ones only after the D8 confirmation.
 
 coverage:
   # Decides whether a paid source with delisted tickers (EODHD) adds value.

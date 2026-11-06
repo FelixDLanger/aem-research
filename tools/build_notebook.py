@@ -46,7 +46,7 @@ md("""
 
 **Run time.** The downloads run on Google's servers, not over your own connection: about 9 GB from the SEC on the first run, one to two hours in all. Keep the tab open and the device awake. Every file is cached on Drive as it finishes, so after a disconnect, Run all resumes where it stopped. Later runs take a few minutes.
 
-**When it ends,** the last cell prints one block – results, timings and any errors. Paste it into the chat. A phase that fails is recorded in that block and the run carries on.
+**When it ends,** the last cell prints one block – results, timings and any errors. Paste it into the chat (it is also saved as `run_summary.txt` in `My Drive/aem-research/output/`). A phase that fails is recorded in that block and the run carries on. If the test suite fails, the run stops at once and prints the same block. If Colab crashes or disconnects before the end, `run_progress.txt` in the same folder shows how far it got – paste its last lines; Run all then resumes from the cached files.
 
 | Phase | Needs the lock? | What it does |
 |---|---|---|
@@ -121,16 +121,27 @@ REPORT = {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M U
 
 code("""
 # ── Phase 0 · Offline test suite: must pass before anything touches data ──
-with LOG.must_pass("0 tests"):
+from aem_research.report import paste_block
+
+
+def _stop_block():
+    REPORT["run"] = LOG.as_dict()
+    print()
+    print(paste_block(REPORT))
+
+
+with LOG.must_pass("0 tests", on_stop=_stop_block):
     try:
         import pytest  # noqa: F401
     except ImportError:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pytest"], check=True)
     res = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
-                         cwd=REPO_DIR, capture_output=True, text=True)
+                         cwd=REPO_DIR, capture_output=True, text=True, env={**os.environ, "COLUMNS": "240"})
     print((res.stdout or res.stderr)[-1500:])
     if res.returncode != 0:
-        raise RuntimeError("Test suite failed – stop here and paste the output above into the chat.")
+        failed = [ln for ln in (res.stdout or "").splitlines() if ln.startswith(("FAILED", "ERROR"))]
+        raise RuntimeError("Test suite failed – " + ("; ".join(failed[:6]) or (res.stdout or res.stderr)[-300:])
+                           + ". The run stops here: paste the block below into the chat.")
 """)
 
 code("""
@@ -139,6 +150,8 @@ from aem_research.env import resolve_paths
 
 paths = resolve_paths(DRIVE_ROOT, cfg.get("data_sources.simfin_cache_dirs")).ensure()
 print(paths.describe())
+LOG.attach_progress(paths.output / "run_progress.txt", header=f"· repo {COMMIT} · config {cfg.sha256[:12]}")
+print("Progress log (shows how far a run got if Colab crashes or disconnects):", paths.output / "run_progress.txt")
 YEARS = cfg.get("coverage.benchmark_years")
 SURV_DATES = [f"{y}-01-03" for y in (2010, 2012, 2014, 2016, 2018, 2020)]
 """)
@@ -504,6 +517,8 @@ REGIME = None
 """, body="""
 series, fred_stats = fred.load(paths.cache / "fred", offline=OFFLINE, manual_dir=paths.work / "data" / "fred")
 REPORT["fred"] = fred_stats
+for gap in fred.gaps(series, fred_stats):          # one missing series must not cost the other moderators
+    LOG.warn("F regime", gap)
 REGIME = fred.regime_at(series, FORMATION)
 if FEATURES is not None:
     REGIME = REGIME.merge(ft.market_regime(FEATURES), on="start_date", how="left")
@@ -580,8 +595,9 @@ REPORT["drive_gb"] = folder_size_gb(paths.work)
 save_report()
 block = paste_block(REPORT)
 (paths.output / "run_summary.txt").write_text(block, encoding="utf-8")
+LOG.finish()
 print(block)
-print(f"Saved to {paths.output}: run_summary.txt, coverage_report.md, coverage_report.json, aem_results.xlsx")
+print(f"Saved to {paths.output}: run_summary.txt, run_progress.txt, coverage_report.md, coverage_report.json, aem_results.xlsx")
 """)
 
 md("""
@@ -590,7 +606,7 @@ md("""
 1. **Paste the run summary** (the block above) into the chat.
 2. **Verdict "not needed" or "optional":** stay on SimFin + Stooq and report base rates with bounds. **"Recommended":** check EODHD's licence (continued use of downloaded data, publishing derived statistics), then fill only the missing tickers.
 3. **Pre-lock checks:** every feature known for at least 80% of universe windows, fewer than 25% "unknown" delistings, and a look at the power table. If one fails, the definition is fixed in the config before the lock.
-4. **Lock:** I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp.
+4. **Lock:** once you confirm D7 and D8 (the regime additions), I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp.
 5. **Next build:** the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark, the placebo.
 """)
 

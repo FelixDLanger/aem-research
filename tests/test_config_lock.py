@@ -33,6 +33,9 @@ def test_shipped_config_loads():
     dec = [d["id"] for d in cfg.get("decisions")]
     assert dec[:6] == ["D1", "D2", "D3", "D4", "D5", "D6"] and len(dec) == len(set(dec))
     assert set(cfg.get("regime.moderators")) >= {"real_yield_10y", "credit_spread_baa", "inflation_cpi_yoy"}
+    # D8: the regime difference is confirmed once, on start dates added after the lock
+    assert "D8" in dec and {"adds", "confirmation", "terminal"} <= set(cfg.get("regime.update"))
+    assert cfg.get("estimation.descriptives") and "D8" in cfg.get("estimation.outputs_to_terminal")
 
 
 def test_open_review_items_block_the_lock(final_config):

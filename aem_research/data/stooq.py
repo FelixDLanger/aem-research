@@ -168,7 +168,11 @@ def load_or_build(stooq_dir: str | Path, cache_dir: str | Path, *, include=("sto
                 return StooqData(prices, groups, str(zp), meta.get("stats", {}), from_cache=True)
     if log:
         log(f"Parsing {zp.name} ({zp.stat().st_size / 1e6:,.0f} MB) – first run takes a few minutes …")
-    prices, groups, stats = parse_bulk_zip(zp, include=include, min_date=min_date, log=log)
+    try:
+        prices, groups, stats = parse_bulk_zip(zp, include=include, min_date=min_date, log=log)
+    except zipfile.BadZipFile as exc:         # an interrupted browser download
+        raise ValueError(f"{zp.name} is not a complete zip ({exc}) – download it again from "
+                         "stooq.com/db/h and replace the file on Drive") from exc
     save_table(prices, cache_dir / "stooq_us_daily")
     save_table(groups, cache_dir / "stooq_us_groups")
     meta_path.parent.mkdir(parents=True, exist_ok=True)

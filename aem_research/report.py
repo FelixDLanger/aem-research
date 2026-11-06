@@ -20,13 +20,19 @@ def paste_block(report: dict) -> str:
         "=" * 72,
         f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · config {str(r.get('config_sha256', ''))[:12]} "
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
-        f"DATA      SimFin {r.get('simfin', {}).get('tickers', 0):,} tickers ({r.get('simfin', {}).get('stopped_trading', 0):,} stopped)"
-        f" · Stooq {r.get('stooq', {}).get('tickers', 0):,} · SEC index {r.get('sec', {})}",
-        "SEC SETS  " + (" | ".join(f"{k} {x}" for k, x in (r.get("sec_datasets") or {}).items()) or "not loaded"),
-        f"VERDICT   EODHD {str(v.get('verdict', 'undetermined')).upper()} – unpriced {_pct(v.get('missing_share'))}, "
-        f"coverage {_pct(v.get('coverage'))}" + (f", optimistic {_pct(v['optimistic'].get('coverage'))} "
-                                                f"-> {str(v['optimistic'].get('verdict', '')).upper()}" if v.get("optimistic") else ""),
     ]
+    if "simfin" in r or "stooq" in r:
+        lines.append(f"DATA      SimFin {r.get('simfin', {}).get('tickers', 0):,} tickers ({r.get('simfin', {}).get('stopped_trading', 0):,} stopped)"
+                     f" · Stooq {r.get('stooq', {}).get('tickers', 0):,} · SEC index {r.get('sec', {})}")
+    else:
+        lines.append("DATA      not loaded yet")
+    lines.append("SEC SETS  " + (" | ".join(f"{k} {x}" for k, x in (r.get("sec_datasets") or {}).items()) or "not loaded"))
+    if v:
+        lines.append(f"VERDICT   EODHD {str(v.get('verdict', 'undetermined')).upper()} – unpriced {_pct(v.get('missing_share'))}, "
+                     f"coverage {_pct(v.get('coverage'))}" + (f", optimistic {_pct(v['optimistic'].get('coverage'))} "
+                                                             f"-> {str(v['optimistic'].get('verdict', '')).upper()}" if v.get("optimistic") else ""))
+    else:
+        lines.append("VERDICT   not reached")
     if f:
         lines.append(f"UNIVERSE  {f.get('formation_dates')} start dates to {f.get('as_of')} · {f.get('universe_windows', 0):,} windows"
                      f" · {f.get('tickers_in_universe', 0):,} tickers · price from 13F {_pct(f.get('price_from_13f'))}"
@@ -36,6 +42,15 @@ def paste_block(report: dict) -> str:
         if r.get(key):
             items = r[key].items() if isinstance(r[key], dict) else []
             lines.append(label + " · ".join(f"{k} {_pct(x) if isinstance(x, float) and abs(x) <= 1 else x}" for k, x in items))
+    fred = r.get("fred") or {}
+    if fred:
+        parts = []
+        for sid, val in fred.items():
+            if "_" in sid:
+                continue
+            why = fred.get(f"{sid}_error") or (f"HTTP {fred[f'{sid}_http']}" if f"{sid}_http" in fred else "")
+            parts.append(f"{sid} {val}" + (f" ({why})" if why and str(val).startswith("missing") else ""))
+        lines.append("FRED      " + " · ".join(parts))
     for row in r.get("power") or []:
         lines.append("POWER     " + " · ".join(f"{k} {x}" for k, x in row.items()))
     for row in r.get("base_rates") or []:
@@ -44,6 +59,16 @@ def paste_block(report: dict) -> str:
     if run.get("phases"):
         lines.append("PHASES    " + " · ".join(f"{p['phase']} {p['status']} {p['seconds']}s" for p in run["phases"]))
         lines.append(f"TIME      {run.get('total_minutes')} min · Drive use {r.get('drive_gb', '?')} GB")
+        rose, top = [], 0.0                        # peak memory only rises: show where it rose
+        for p in run["phases"]:
+            if p.get("ram_gb") is not None and p["ram_gb"] > top:
+                rose.append(f"{p['phase']} {p['ram_gb']}")
+                top = p["ram_gb"]
+        if run.get("peak_ram_gb") is not None:
+            lines.append(f"RAM       peak {run['peak_ram_gb']} of {run.get('total_ram_gb', '?')} GB"
+                         + (" · rose in: " + " · ".join(rose) if rose else ""))
+    for w in run.get("warnings") or []:
+        lines.append(f"WARNING   [{w['phase']}] {w['message']}")
     errs = run.get("errors") or []
     if errs:
         for e in errs:

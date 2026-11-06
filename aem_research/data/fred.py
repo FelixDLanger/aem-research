@@ -2,8 +2,13 @@
 
 Series (config: regime.moderators): DFII10 10-year real yield (daily), DGS2 2-year
 Treasury yield (daily), BAA10Y Baa corporate spread over the 10-year Treasury (daily),
-CPIAUCNS CPI for all urban consumers, not seasonally adjusted (monthly; the
-unadjusted index is not revised, so today's file shows what was published then).
+CPIAUCNS CPI for all urban consumers, not seasonally adjusted (monthly; BLS: the
+unadjusted CPI-U is "final when issued", and its 1982–84 base has not changed, so
+today's file shows what was published then and needs no splice).
+
+BAA10Y is Moody's data, copyrighted and not to be redistributed: the series and the
+regime table stay on Drive (the repository's .gitignore blocks data folders); papers
+report estimates, not the series.
 
 Each series is cached on Drive and refreshed when older than `max_age_days`. CSV files
 saved by hand into the manual folder (named <SERIES>.csv, as FRED's download button
@@ -22,6 +27,8 @@ from ..io_utils import load_table, save_table
 
 CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
 SERIES = {"real_yield_10y": "DFII10", "yield_2y": "DGS2", "credit_spread_baa": "BAA10Y", "cpi_nsa": "CPIAUCNS"}
+MODERATOR = {"real_yield_10y": "real_yield_10y", "yield_2y": "tightening_2y_12m",
+             "credit_spread_baa": "credit_spread_baa", "cpi_nsa": "inflation_cpi_yoy"}
 USER_AGENT = "aem-research/0.2 (academic research; github.com/FelixDLanger/aem-research)"
 
 
@@ -69,7 +76,10 @@ def load(cache_dir: str | Path, series: dict | None = None, *, session=None, off
             s, how = pd.Series(cached["value"].to_numpy(), index=pd.DatetimeIndex(cached["date"]).astype("datetime64[ns]"),
                                name=sid), "cached"
         if s is None and manual_dir is not None and (Path(manual_dir) / f"{sid}.csv").exists():
-            s, how = parse_csv((Path(manual_dir) / f"{sid}.csv").read_bytes()), "manual"
+            try:                              # one unreadable file must not cost the other series
+                s, how = parse_csv((Path(manual_dir) / f"{sid}.csv").read_bytes()), "manual"
+            except (ValueError, UnicodeDecodeError, pd.errors.ParserError) as exc:
+                stats[f"{sid}_error"] = f"manual {sid}.csv unreadable: {exc}"
         if s is not None and len(s):
             out[name] = s
             stats[sid] = f"{how}, {s.index.min().date()} to {s.index.max().date()}"
@@ -78,6 +88,16 @@ def load(cache_dir: str | Path, series: dict | None = None, *, session=None, off
         if log:
             log(f"  FRED {sid}: {stats[sid]}")
     return out, stats
+
+
+def gaps(series: dict, stats: dict, names: dict | None = None) -> list[str]:
+    """One line per configured series that could not be loaded, with the reason."""
+    out = []
+    for name, sid in (names or SERIES).items():
+        if name not in series:
+            why = stats.get(f"{sid}_error") or (f"HTTP {stats[f'{sid}_http']}" if f"{sid}_http" in stats else "no download, cache or manual file")
+            out.append(f"FRED {sid} missing, so {MODERATOR.get(name, name)} is not computed ({why})")
+    return out
 
 
 def _last_before(s: pd.Series, when: pd.Timestamp) -> float:

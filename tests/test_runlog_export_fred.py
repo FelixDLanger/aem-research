@@ -164,3 +164,118 @@ def test_bad_zip_is_skipped_and_reported(tmp_path):
                                client=C(), log=None)
     assert stats["downloaded"] == 1 and stats["bad"] == 1 and stats["bad_labels"] == ["2016q2"]
     assert len(tables["t"]) == 1
+
+
+# ---------------------------------------------------------------- failures that must still leave a paste block
+
+def test_must_pass_prints_the_block_then_stops(capsys):
+    log = RunLog()
+    report = {"generated_utc": "2026-11-07 09:00 UTC", "repo_commit": "abc1234", "config_sha256": "f" * 64,
+              "lock_status": "unlocked", "versions": {"pandas": "2.2.2"}}
+
+    def stop():
+        report["run"] = log.as_dict()
+        print(paste_block(report))
+
+    with pytest.raises(RuntimeError, match="Test suite failed"):
+        with log.must_pass("0 tests", on_stop=stop):
+            raise RuntimeError("Test suite failed – FAILED tests/test_x.py::test_y - AssertionError")
+    out = capsys.readouterr().out
+    assert "0 tests STOPPED" in out and "ERROR     [0 tests] RuntimeError: Test suite failed – FAILED tests/test_x.py" in out
+    assert "DATA      not loaded yet" in out and "VERDICT   not reached" in out and "abc1234" in out
+
+    def broken_callback():
+        raise KeyError("x")
+
+    with pytest.raises(ValueError, match="real error"):              # a failing callback never masks the error
+        with log.must_pass("again", on_stop=broken_callback):
+            raise ValueError("real error")
+
+
+def test_progress_file_shows_how_far_a_run_got(tmp_path):
+    log = RunLog()
+    with log.must_pass("0 tests"):
+        pass
+    path = tmp_path / "out" / "run_progress.txt"
+    log.attach_progress(path, header="· repo abc1234")
+    with log.phase("A SimFin"):
+        pass
+    with log.phase("F 13F holdings"):
+        raise MemoryError("Unable to allocate 3.1 GiB")
+    log.warn("F regime", "FRED BAA10Y missing, so credit_spread_baa is not computed (HTTP 404)")
+    log.skipped("E outcomes", "not locked")
+    log.finish()
+    text = path.read_text()
+    assert "=== run started" in text and "· repo abc1234" in text
+    assert "end   0 tests: ok" in text                                  # phases before the file existed
+    assert "start A SimFin" in text and "end   A SimFin: ok" in text
+    assert "end   F 13F holdings: FAILED" in text and "MemoryError: Unable to allocate" in text
+    assert "warn  F regime: FRED BAA10Y missing" in text and "skip  E outcomes (not locked)" in text
+    assert "=== run finished" in text and "1 errors, 1 warnings" in text
+    log.attach_progress(path)                                            # a rerun appends; history is kept
+    assert path.read_text().count("=== run started") == 2
+
+
+def test_warnings_and_memory_reach_the_paste_block():
+    log = RunLog()
+    with log.phase("F features"):
+        big = np.ones(1_000_000)
+    log.warn("F regime", "FRED BAA10Y missing, so credit_spread_baa is not computed (HTTP 404)")
+    d = log.as_dict()
+    assert big.sum() == 1e6 and d["phases"][0]["ram_gb"] > 0 and d["peak_ram_gb"] > 0 and d["total_ram_gb"] > 0
+    block = paste_block({"run": d, "drive_gb": 0.1})
+    assert "RAM       peak" in block and "F features" in block
+    assert "WARNING   [F regime] FRED BAA10Y missing, so credit_spread_baa is not computed (HTTP 404)" in block
+    assert "ERRORS    none" in block
+
+
+def test_an_unreadable_fred_file_costs_only_that_series(tmp_path):
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    (manual / "DFII10.csv").write_text("observation_date,DFII10\n2016-06-30,0.3\n")
+    (manual / "BAA10Y.csv").write_text("not a csv at all")
+    names = {"real_yield_10y": "DFII10", "credit_spread_baa": "BAA10Y"}
+    out, stats = fred.load(tmp_path / "cache", names, offline=True, manual_dir=manual, log=None)
+    assert list(out) == ["real_yield_10y"] and stats["BAA10Y"] == "missing" and "unreadable" in stats["BAA10Y_error"]
+    gaps = fred.gaps(out, stats, names)
+    assert gaps == ["FRED BAA10Y missing, so credit_spread_baa is not computed "
+                    "(manual BAA10Y.csv unreadable: not a FRED CSV: fewer than two columns)"]
+    r = fred.regime_at(out, ["2016-07-01"])
+    assert "real_yield_10y" in r.columns and "credit_spread_baa" not in r.columns
+    line = next(ln for ln in paste_block({"fred": stats}).splitlines() if ln.startswith("FRED"))
+    assert "DFII10 manual" in line and "BAA10Y missing (manual BAA10Y.csv unreadable" in line
+
+
+def test_a_truncated_stooq_zip_says_what_to_do(tmp_path):
+    from aem_research.data import stooq
+    d = tmp_path / "stooq"
+    d.mkdir()
+    (d / "d_us_txt.zip").write_bytes(b"PK\x03\x04 interrupted download")
+    with pytest.raises(ValueError, match="not a complete zip.*download it again"):
+        stooq.load_or_build(d, tmp_path / "cache", log=None)
+
+
+def test_error_trace_is_short_and_points_at_the_cause():
+    from aem_research.data import stooq
+    log = RunLog()
+    with log.phase("B Stooq"):
+        try:
+            raise OSError("inner cause")
+        except OSError as inner:
+            raise ValueError("outer") from inner
+    where = log.errors[0]["where"]
+    assert where and all("runlog.py" not in w for w in where)
+    assert where[-1].startswith("tests/test_runlog_export_fred.py, line")      # the frame that raised
+    assert not any("inner cause" in w for w in where)
+    from aem_research.runlog import _short
+    assert _short(stooq.__file__) == "aem_research/data/stooq.py"
+    assert _short("/usr/lib/python3.13/zipfile/__init__.py") == "zipfile/__init__.py"
+
+
+def test_ram_line_shows_where_the_peak_rose():
+    run = {"phases": [{"phase": "A", "status": "ok", "seconds": 1, "ram_gb": 0.5},
+                      {"phase": "B", "status": "ok", "seconds": 1, "ram_gb": 0.5},
+                      {"phase": "F 13F", "status": "ok", "seconds": 1, "ram_gb": 6.2}],
+           "peak_ram_gb": 6.2, "total_ram_gb": 12.7, "total_minutes": 1}
+    line = next(ln for ln in paste_block({"run": run}).splitlines() if ln.startswith("RAM"))
+    assert line == "RAM       peak 6.2 of 12.7 GB · rose in: A 0.5 · F 13F 6.2"
