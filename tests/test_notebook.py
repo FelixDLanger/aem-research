@@ -28,3 +28,18 @@ def test_no_vendor_data_or_secrets_in_repo():
     for p in files:
         if p.suffix in (".py", ".ipynb", ".yaml", ".md"):
             assert not pattern.search(p.read_text(encoding="utf-8", errors="ignore")), p
+
+
+def test_gitignore_cannot_hide_package_code():
+    """An unanchored 'data/' rule once ignored aem_research/data/ – the whole data layer.
+    Every directory rule must be anchored to the repo root or match no code folder."""
+    rules = [r.strip() for r in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+             if r.strip() and not r.startswith("#")]
+    caches = {"__pycache__", ".pytest_cache", ".ipynb_checkpoints"}
+    code_dirs = {p.name for base in ("aem_research", "tests", "tools", "notebooks", "config")
+                 for p in [ROOT / base, *(ROOT / base).rglob("*")]
+                 if p.is_dir() and p.name not in caches and not caches & set(p.parts)}
+    for rule in rules:
+        if rule.endswith("/") and not rule.startswith("/"):
+            assert rule.rstrip("/") not in code_dirs, f".gitignore rule {rule!r} would hide a code folder"
+    assert (ROOT / "aem_research" / "data" / "fsds.py").exists()

@@ -1,7 +1,8 @@
 # Raw and cached data never belong in this repository (vendor licences, size).
-data/
-cache/
-output/
+# Anchored to the repo root: aem_research/data/ is code and must stay tracked.
+/data/
+/cache/
+/output/
 *.parquet
 *.pkl
 *.zip
