@@ -67,7 +67,7 @@ decisions:
       routine and unclassified insiders reported separately.
   - id: D7
     topic: macro regime
-    status: proposed by Claude on Nov 6, 2026, in answer to Felix's question on rates and inflation; Felix confirms it at the lock
+    status: proposed by Claude in answer to Felix's question on rates and inflation, confirmed by Felix on Nov 6, 2026
     decision: >-
       The 2022 split stays the primary regime definition. Six exploratory moderators,
       each measured at the start date, test the mechanisms behind it: the 10-year real
@@ -77,7 +77,7 @@ decisions:
       The same regime variables feed Paper A.
   - id: D8
     topic: regime confirmation and yearly updates
-    status: proposed by Claude on Nov 6, 2026; Felix confirms it at the lock
+    status: proposed by Claude, confirmed by Felix on Nov 6, 2026
     decision: >-
       The locked sample has complete windows after 2021 only at the 3-year horizon, from
       eight start dates in two calendar years, so H5 can find a regime difference but
@@ -89,6 +89,21 @@ decisions:
       start dates only – data nobody had seen at the lock, and an arm the same size as
       2022–2023. Until it passes, the terminal uses the pooled base rates and shows the
       regime rates beside them.
+  - id: D9
+    topic: unplanned findings
+    status: Felix's principle (Nov 6, 2026); the rules below proposed by Claude
+    decision: >-
+      The lock fixes what is tested, not what may be learned. Patterns nobody specified
+      are welcome – like the EAGI finding that governance leads to AI adoption – and are
+      reported in their own section, labeled exploratory, with every analysis tried, so
+      a reader can see how many looks produced them. A finding earns weight in the
+      screening terminal once it holds on data it was not found in: exploration runs
+      first on the fit period (start dates to 2016) and is confirmed once on 2017-2021;
+      a finding that needs the whole sample is confirmed on the start dates added under
+      D8. Until then the terminal shows it as a provisional flag with its in-sample
+      estimate, logged and Brier-scored in the decision log, with no weight in the
+      posterior: newly discovered effects are inflated on average (Ioannidis 2008), and
+      an inflated likelihood ratio oversizes the bet.
 
 review_before_lock:
   - >-
@@ -97,8 +112,6 @@ review_before_lock:
     date, and that fewer than 25% of ended series fall into the "unknown" delisting
     class. Review the power table (smallest detectable likelihood ratio per cohort). If
     a check fails, fix the definition here before locking.
-  - >-
-    Felix confirms D7 and D8 (proposed by Claude on Nov 6, 2026) or changes them.
 
 hypotheses:
   - id: H1
@@ -220,7 +233,22 @@ analysis_hierarchy: >-
   H1 and H2 (H2a and H2b, Holm-corrected) are primary and are the only results that
   may be stated as findings. H2c, H3 and H4 are secondary and are reported as
   supporting evidence. H5 and H6 are exploratory and are reported as hypotheses for
-  future work.
+  future work. Unplanned findings (D9) are reported as exploratory; one that holds on
+  data it was not found in is reported as a replicated exploratory finding and may
+  inform the terminal.
+
+exploration:
+  # D9: the lock fixes what is tested, not what may be learned.
+  report: a separate section, labeled exploratory, listing every analysis tried
+  discovery: start dates up to 2016 (the fit period) first, wherever the question allows
+  confirmation: >-
+    once on 2017-2021 for findings made in the fit period; on the start dates added
+    under D8 for findings that need the whole sample
+  terminal: >-
+    confirmed findings enter with their measured weight; unconfirmed ones are shown as
+    provisional flags, logged and Brier-scored in the decision log, with no weight in
+    the posterior
+  log: every exploratory analysis is written to output/exploration_log.csv with its date, sample and result, so the number of looks is on record
 
 universe:
   country: US
@@ -425,6 +453,7 @@ estimation:
     6 / 3%), P(touch 10x within 5 years) replaces the 3% prior, and the test-period
     likelihood ratios are set against the asserted table (2.0 / 1.3 / 0.8 / 0.6).
     Regime-specific rates replace the pooled ones only after the D8 confirmation.
+    Unplanned findings reach the terminal under D9: provisional flags until confirmed.
 
 coverage:
   # Decides whether a paid source with delisted tickers (EODHD) adds value.

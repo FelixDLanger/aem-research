@@ -12,13 +12,14 @@ Base rates for extreme multiples in US small caps, and whether the AEM screening
 - **Hypotheses:** H1 base rates; H2 the fallen-quality cohort, tested with any insider purchase (H2a) and with opportunistic insiders only (H2b, Cohen, Malloy and Pomorski 2012); H3 the horizon conversion 3x/3y = 6.24x/5y; H4 likelihood ratios for the AEM-2 v2.6 signals, plus a checklist benchmark; H5 regime; H6 post-results insider clusters.
 - **Regime:** the 2022 split is primary; six exploratory moderators from FRED and the universe itself (real yield, tightening, credit spread, CPI inflation, market stress, starting valuation), measured on each start date and shared with Paper A. A regime difference found in the locked sample is tested once, in late 2028, on start dates added after the lock (D8).
 - **Falsification and power:** an insider-sale placebo for H2, and the smallest detectable likelihood ratio per cohort before the lock.
+- **Discovery:** the lock fixes what is tested, not what may be learned. Unplanned findings are welcome, reported as exploratory with every analysis tried, and earn weight in the screening terminal once they hold on data they were not found in (D9).
 - **Point in time:** every feature is used only after its filing date; a guard rejects the features otherwise. Size and price filters undo later split adjustments with 13F implied prices.
 
 ## What is here
 
 | Path | Contents |
 |---|---|
-| `config/preregistration.yaml` | Decisions D1–D8, open review items, hypotheses H1–H6, every parameter. Hashed; `config/LOCK.json` locks it. |
+| `config/preregistration.yaml` | Decisions D1–D9, open review items, hypotheses H1–H6, every parameter. Hashed; `config/LOCK.json` locks it. |
 | `aem_research/config.py` | Canonical hash, lock, amendment history; open review items block the lock |
 | `aem_research/data/simfin_cache.py`, `stooq.py` | Price sources: your SimFin cache, the Stooq bulk file |
 | `aem_research/data/sec.py` | EDGAR quarterly index: Form 25 delistings and merger filings; the SEC client |
@@ -60,7 +61,7 @@ Features, delisting classes and the regime table are also cached as parquet in `
 
 Phases A–F look only at whether data exist and at counts, never at returns, so they run before the lock. The outcome engine refuses to run until `config/LOCK.json` matches the config hash. Changing the config afterwards is an amendment: it needs a deliberate re-lock with a note, and the earlier lock stays in the history. A public commit of `LOCK.json` is the timestamp that makes the pre-registration verifiable.
 
-The lock also refuses while `review_before_lock` lists open items. Two remain: running Phase F once to check that every feature is known for at least 80% of universe windows, that fewer than 25% of ended series are "unknown" delistings, and how large an effect each cohort can detect; and the author's confirmation of D7 and D8, the regime additions. The `estimation` section fixes the tests in advance: likelihood ratios with a firm-cluster bootstrap, Holm corrections, an ordered logit on the six buckets, a 10x logit, start-date fixed effects and the out-of-sample split.
+The lock also refuses while `review_before_lock` lists open items. One remains: running Phase F once to check that every feature is known for at least 80% of universe windows, that fewer than 25% of ended series are "unknown" delistings, and how large an effect each cohort can detect. The `estimation` section fixes the tests in advance: likelihood ratios with a firm-cluster bootstrap, Holm corrections, an ordered logit on the six buckets, a 10x logit, start-date fixed effects and the out-of-sample split.
 
 ## Outcome rules (summary)
 

@@ -36,6 +36,9 @@ def test_shipped_config_loads():
     # D8: the regime difference is confirmed once, on start dates added after the lock
     assert "D8" in dec and {"adds", "confirmation", "terminal"} <= set(cfg.get("regime.update"))
     assert cfg.get("estimation.descriptives") and "D8" in cfg.get("estimation.outputs_to_terminal")
+    # D9: unplanned findings are welcome, labeled, logged, and confirmed before they get weight
+    assert "D9" in dec and {"report", "discovery", "confirmation", "terminal", "log"} <= set(cfg.get("exploration"))
+    assert "D9" in cfg.get("analysis_hierarchy") and "D9" in cfg.get("estimation.outputs_to_terminal")
 
 
 def test_open_review_items_block_the_lock(final_config):

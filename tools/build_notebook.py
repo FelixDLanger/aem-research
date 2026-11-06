@@ -606,7 +606,7 @@ md("""
 1. **Paste the run summary** (the block above) into the chat.
 2. **Verdict "not needed" or "optional":** stay on SimFin + Stooq and report base rates with bounds. **"Recommended":** check EODHD's licence (continued use of downloaded data, publishing derived statistics), then fill only the missing tickers.
 3. **Pre-lock checks:** every feature known for at least 80% of universe windows, fewer than 25% "unknown" delistings, and a look at the power table. If one fails, the definition is fixed in the config before the lock.
-4. **Lock:** once you confirm D7 and D8 (the regime additions), I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp.
+4. **Lock:** I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp. D7–D9 (regime, its confirmation, unplanned findings) are already settled.
 5. **Next build:** the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark, the placebo.
 """)
 
