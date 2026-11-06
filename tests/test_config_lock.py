@@ -30,7 +30,9 @@ def test_shipped_config_loads():
     assert models and all({"id", "outcome", "model"} <= set(m) for m in models)
     # every pre-registered test belongs to a hypothesis (H2c and H4_benchmark map to H2 and H4)
     assert {re.match(r"H\d+", k).group(0) for k in cfg.get("estimation.tests")} <= set(ids)
-    assert [d["id"] for d in cfg.get("decisions")] == ["D1", "D2", "D3", "D4", "D5", "D6"]
+    dec = [d["id"] for d in cfg.get("decisions")]
+    assert dec[:6] == ["D1", "D2", "D3", "D4", "D5", "D6"] and len(dec) == len(set(dec))
+    assert set(cfg.get("regime.moderators")) >= {"real_yield_10y", "credit_spread_baa", "inflation_cpi_yoy"}
 
 
 def test_open_review_items_block_the_lock(final_config):

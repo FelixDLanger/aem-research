@@ -158,7 +158,8 @@ def _tercile_low(x: pd.Series, size: pd.Series) -> pd.Series:
 
 
 def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, ins: pd.DataFrame | None,
-             breadth: pd.DataFrame | None, cfg_data: dict, prices13: pd.DataFrame | None = None) -> pd.DataFrame:
+             breadth: pd.DataFrame | None, cfg_data: dict, prices13: pd.DataFrame | None = None,
+             sales: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per ticker and start date with every feature and the universe flag.
 
     Size and price filters use the unadjusted entry price. Vendor histories are rescaled
@@ -251,9 +252,55 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
     f["cohort_known"] = f["fcf_pos"].notna() & f["net_cash_pos"].notna()
     f["h2a"] = (f["fallen"] & quality & f["insider_any"]).astype("boolean")
     f["h2b"] = (f["fallen"] & quality & f["insider_opportunistic"]).astype("boolean")
-    for c in ("h2a", "h2b"):
+    f["sale_any"] = False
+    if sales is not None and len(sales):
+        s = _ns(sales.copy(), "start_date")[["issuer_cik", "start_date", "insider_any"]]
+        s = s.rename(columns={"issuer_cik": "cik", "insider_any": "_sale"})
+        s["cik"] = s["cik"].astype("Int64")
+        f = f.merge(s, on=["cik", "start_date"], how="left")
+        f["sale_any"] = f["_sale"].astype("boolean").fillna(False).astype(bool)
+        f = f.drop(columns="_sale")
+    # placebo: a sale and no purchase in place of the purchase
+    f["h2_placebo"] = (f["fallen"] & quality & f["sale_any"] & ~f["insider_any"]).astype("boolean")
+    for c in ("h2a", "h2b", "h2_placebo"):
         f.loc[~f["cohort_known"], c] = pd.NA
     return f
+
+
+def market_regime(features: pd.DataFrame) -> pd.DataFrame:
+    """Per start date, from the universe itself: median drawdown (market stress) and median
+    trailing free-cash-flow yield (starting valuation). Counts and levels only."""
+    u = features[features["in_universe"]].copy()
+    if u.empty:
+        return pd.DataFrame(columns=["start_date", "market_stress", "valuation_fcf_yield"])
+    fcf = pd.to_numeric(u["fcf"], errors="coerce") if "fcf" in u.columns else pd.Series(np.nan, index=u.index)
+    u["fcf_yield"] = fcf / u["market_cap"]
+    g = u.groupby("start_date")
+    return pd.DataFrame({"market_stress": g["drawdown"].median(),
+                         "valuation_fcf_yield": g["fcf_yield"].median()}).reset_index()
+
+
+def power_table(features: pd.DataFrame, cohorts=("h2a", "h2b", "h2_placebo"), base_rates=(0.05, 0.10, 0.15),
+                alpha_z: float = 1.6449, power_z: float = 0.8416) -> pd.DataFrame:
+    """Smallest likelihood ratio each cohort could detect (one-sided 5%, 80% power) at assumed
+    base rates – from cohort counts only, no outcomes. Windows overlap and repeat firms, so
+    the effective sample is taken as the number of distinct firms (conservative)."""
+    u = features[features["in_universe"]]
+    rows = []
+    for c in cohorts:
+        if c not in u.columns:
+            continue
+        m = u[u[c].fillna(False).astype(bool)]
+        n_firms = int(m["cik"].nunique()) if len(m) else 0
+        row = {"cohort": c, "windows": int(len(m)), "firms": n_firms}
+        for p0 in base_rates:
+            if n_firms:
+                p1 = min(p0 + (alpha_z + power_z) * np.sqrt(p0 * (1 - p0) / n_firms), 0.999)
+                row[f"min_lr_at_{int(p0 * 100)}pct"] = round((p1 / (1 - p1)) / (p0 / (1 - p0)), 2)
+            else:
+                row[f"min_lr_at_{int(p0 * 100)}pct"] = np.nan
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def price_basis_check(features: pd.DataFrame) -> pd.DataFrame:
@@ -310,6 +357,7 @@ def coverage_report(features: pd.DataFrame, *, h4_start=None) -> pd.DataFrame:
         "insider_buy": g["insider_any"].sum(),
         "h2a_cohort": g["h2a"].apply(lambda s: int(s.fillna(False).sum())),
         "h2b_cohort": g["h2b"].apply(lambda s: int(s.fillna(False).sum())),
+        "placebo_cohort": g["h2_placebo"].apply(lambda s: int(s.fillna(False).sum())),
     })
     return rep.round(3).reset_index()
 

@@ -233,3 +233,15 @@ def test_unadjusted_price_undoes_later_splits():
     assert set(fixed["price_basis"]) == {"13F"}
     chk = ft.price_basis_check(fixed.reset_index())
     assert chk.loc[0, "share_off_10pct"] == 1.0          # this vendor's closes are split-adjusted
+
+
+def test_insider_sale_placebo():
+    s, panel, companies, fund, ins, breadth = feature_inputs()
+    ins = ins[ins["issuer_cik"] != 100]                           # T00: fallen quality, but no purchase
+    sales = pd.DataFrame({"issuer_cik": [100, 101], "start_date": s, "insider_any": True})
+    pf = ft.price_features(panel, [s])
+    f = ft.assemble(pf, ft.ticker_ciks(pf, companies, []), fund, ins, breadth, load_config(CONFIG).data,
+                    sales=sales).set_index("ticker")
+    assert bool(f.loc["T00", "h2_placebo"]) and not bool(f.loc["T00", "h2a"])
+    assert not bool(f.loc["T01", "h2_placebo"])                   # sold, but not fallen
+    assert ft.coverage_report(f.reset_index())["placebo_cohort"].iloc[0] == 1

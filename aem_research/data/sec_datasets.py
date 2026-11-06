@@ -166,7 +166,8 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     tables: dict[str, list[pd.DataFrame]] = {}
-    stats = {"files": len(items), "cached": 0, "downloaded": 0, "local": 0, "missing": 0, "missing_labels": []}
+    stats = {"files": len(items), "cached": 0, "downloaded": 0, "local": 0, "missing": 0, "bad": 0,
+             "missing_labels": [], "bad_labels": []}
     for label, urls in items:
         mark = _marker(cache_dir, prefix, label)
         if mark.exists():
@@ -194,8 +195,15 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
             stats["missing"] += 1
             stats["missing_labels"].append(label)
             continue
-        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            out = extract(zf)
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                out = extract(zf)
+        except zipfile.BadZipFile as exc:      # a truncated download: skip it, report it, retry next run
+            stats["bad"] += 1
+            stats["bad_labels"].append(label)
+            if log:
+                log(f"  {prefix} {label}: not a valid zip ({exc}) – skipped; it is retried on the next run")
+            continue
         for n, df in out.items():
             save_table(df, cache_dir / f"{prefix}_{label}_{n}")
             tables.setdefault(n, []).append(df)

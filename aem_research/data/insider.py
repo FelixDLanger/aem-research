@@ -165,6 +165,21 @@ def purchases(tx: pd.DataFrame, roles=("officer", "director"), *, exclude_plan: 
     return p.reset_index(drop=True)
 
 
+def sales(tx: pd.DataFrame, roles=("officer", "director"), *, exclude_plan: bool = True) -> pd.DataFrame:
+    """Open-market sales (code S, disposed) by insiders in the given roles – the H2 placebo."""
+    if tx is None or tx.empty:
+        return pd.DataFrame(columns=list(tx.columns) if tx is not None else [])
+    role = pd.Series(False, index=tx.index)
+    if "officer" in roles:
+        role |= tx["is_officer"]
+    if "director" in roles:
+        role |= tx["is_director"]
+    s = tx[(tx["code"] == "S") & (tx["acq_disp"] == "D") & role]
+    if exclude_plan:
+        s = s[~s["plan_10b5_1"].fillna(False).astype(bool)]
+    return s.reset_index(drop=True)
+
+
 def signals(buys: pd.DataFrame, classes: pd.DataFrame, formation_dates, *, lookback_months: int = 6,
             cluster_min: int = 2, report_dates: pd.DataFrame | None = None,
             post_results_days: int = 14) -> pd.DataFrame:

@@ -41,7 +41,7 @@ decisions:
       describe the same population.
   - id: D3
     topic: formation frequency
-    status: proposed by Claude on Nov 6, 2026 – open for Felix's review
+    status: proposed by Claude, confirmed by Felix on Nov 6, 2026
     decision: >-
       Quarterly formation dates (the first trading day of January, April, July and
       October) instead of year-end only. The AEM applies its prior on any date, so the
@@ -65,16 +65,23 @@ decisions:
       Both definitions, compared: any officer or director purchase (combined) and
       purchases by opportunistic insiders only (Cohen, Malloy and Pomorski 2012), with
       routine and unclassified insiders reported separately.
+  - id: D7
+    topic: macro regime
+    decision: >-
+      The 2022 split stays the primary regime definition. Six exploratory moderators,
+      each measured at the start date, test the mechanisms behind it: the 10-year real
+      yield (discount rate), the 12-month change in the 2-year yield (tightening), the
+      Baa credit spread (refinancing and distress), CPI inflation, the universe's median
+      drawdown (market stress) and its median free-cash-flow yield (starting valuation).
+      The same regime variables feed Paper A.
 
 review_before_lock:
-  - >-
-    D3: confirm quarterly formation dates (proposed Nov 6, 2026), or revert to January
-    only.
   - >-
     Run Phase F of the notebook once (counts only, no returns) and check that each
     feature is known for at least 80% of universe windows from its first formation
     date, and that fewer than 25% of ended series fall into the "unknown" delisting
-    class. If a check fails, fix the definition here before locking.
+    class. Review the power table (smallest detectable likelihood ratio per cohort). If
+    a check fails, fix the definition here before locking.
 
 hypotheses:
   - id: H1
@@ -107,6 +114,13 @@ hypotheses:
     ablation: >-
       Drop each cohort condition in turn and report each condition's marginal
       likelihood ratio, to show which condition carries the information.
+    placebo: >-
+      The same cohort with an officer or director open-market sale and no purchase in
+      place of the purchase. A likelihood ratio above 1 there would mean fallen quality,
+      not the insider's information, drives H2.
+    if_null: >-
+      The terminal keeps scoring turnarounds on the Matrix's three-year horizon, but an
+      insider purchase earns no extra weight in the turnaround lane.
   - id: H3
     tier: secondary
     type: confirmatory
@@ -115,6 +129,8 @@ hypotheses:
       5 years), where 6.24 = 3^(5/3) is the AEM Matrix's annualized-rate mapping.
       The mapping is rejected if the ratio of the two probabilities differs from 1 at
       the 5% level.
+    if_null: The Matrix keeps the 6.24 mapping for three-year claims.
+    if_rejected: The Matrix replaces 6.24 with the measured equivalent multiple.
   - id: H4
     tier: secondary
     type: confirmatory
@@ -129,12 +145,22 @@ hypotheses:
       Out of sample, the fitted 10x model (M2) is compared with a unit-weighted
       checklist of the same signals and with the base rate alone, by Brier score. If M2
       does not beat the checklist, the checklist is what the terminal uses.
+    if_null: >-
+      A signal whose likelihood ratio is not above 1 out of sample keeps no weight in the
+      AEM-2 posterior; the asserted table (2.0 / 1.3 / 0.8 / 0.6) is replaced by the
+      measured ratios, including the nulls.
   - id: H5
     tier: exploratory
     type: exploratory
     statement: >-
       Regime. Base rates and likelihood ratios differ between start dates before 2022
-      and 2022 or later. Low power by construction; reported as exploratory only.
+      and 2022 or later (the primary split; complete windows after 2021 exist only at the
+      3-year horizon). Exploratory moderators, each measured at the start date (see
+      regime): the 10-year real yield, the 12-month change in the 2-year yield, the Baa
+      credit spread, CPI inflation, the universe's median drawdown and its median
+      free-cash-flow yield. Macro variables vary only across start dates, so inference
+      resamples calendar years, not firms. Low power by construction; reported as
+      exploratory only.
   - id: H6
     tier: exploratory
     type: exploratory
@@ -143,6 +169,22 @@ hypotheses:
       after a 10-Q or 10-K filing (the AEM-2 v2.6 S4 flag; the filing date stands in for
       the results date) carry a higher likelihood ratio for touching 3x within 3 years
       than other purchases.
+
+regime:
+  primary_split: start dates before 2022 versus 2022 and later
+  moderators:
+    real_yield_10y: {source: FRED DFII10, rule: last daily value before the start date}
+    tightening_2y_12m: {source: FRED DGS2, rule: 2-year yield change over the 12 months before the start date}
+    credit_spread_baa: {source: FRED BAA10Y, rule: last daily value before the start date}
+    inflation_cpi_yoy: {source: FRED CPIAUCNS, rule: 12-month change of the index two months before the start month, the latest release on the start date}
+    market_stress: universe median drawdown from the 3-year high on the start date
+    valuation_fcf_yield: universe median trailing free cash flow over market cap on the start date
+  mechanisms: >-
+    Ten-baggers are long-duration bets, so lower real rates lift them most. Small caps
+    fund with equity and floating-rate debt, so tightening raises dilution, distress and
+    delistings, which should favor the net-cash, cash-generating fallen-quality cohort.
+    Starting valuation and market stress set how much rebound is available.
+  inference: year-block bootstrap (the four start dates of a calendar year resampled together)
 
 analysis_hierarchy: >-
   H1 and H2 (H2a and H2b, Holm-corrected) are primary and are the only results that
@@ -341,6 +383,9 @@ estimation:
     - Nasdaq performance delistings at -30% (the -55% estimate comes from CRSP's pre-1999 Nasdaq data)
     - insider classification on purchases only
     - drawdown relative to the universe median (H2)
+    - without the April and July 2020 start dates, formed at the COVID trough (as AEM-2 v2.6 flags the 2009 trough)
+    - multiples in real terms (the touch threshold rises with CPI from entry)
+    - insider-sale placebo for H2 (see H2 placebo)
   outputs_to_terminal: >-
     The measured five-year bucket shares replace the K1d placeholder (23 / 25 / 27 / 16 /
     6 / 3%), P(touch 10x within 5 years) replaces the 3% prior, and the test-period
@@ -363,6 +408,7 @@ data_sources:
   simfin_cache_dirs: ["cvm-research/data/raw", "cvm-research/data"]   # relative to the Drive root
   stooq_bulk_page: "https://stooq.com/db/h/"
   sec_min_interval_seconds: 0.2
+  fred_csv: "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"   # no key needed
   sec_financial_statements: "https://www.sec.gov/files/dera/data/financial-statement-data-sets/{year}q{q}.zip"
   sec_insider_transactions: "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{year}q{q}_form345.zip"
   sec_form13f: "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/"

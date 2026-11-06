@@ -1,7 +1,7 @@
 """End-to-end check: build a synthetic Drive, then execute every notebook code cell in order.
 
 Usage (outside Colab, no network):
-    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked]
+    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked|broken]
 Scenarios:
   full           SimFin with CIKs and ISINs, a Stooq zip, SEC index caches, and the SEC data
                  sets (XBRL, Form 4, 13F) as hand-downloaded zips in data/sec/manual
@@ -9,6 +9,8 @@ Scenarios:
   empty          no data at all
   locked         as full, on a copy of the repo whose pre-registration is finalized and
                  locked, so Phase E computes outcomes
+  broken         as full, plus a truncated 13F zip and a corrupt FRED file: the run must
+                 finish, skip the bad zip, and report the FRED failure in the paste block
 Every scenario must finish with exit code 0.
 """
 import json
@@ -26,7 +28,7 @@ import pandas as pd
 SCRATCH = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SCENARIO = sys.argv[3] if len(sys.argv) > 3 else "full"
-FULL = SCENARIO in ("full", "locked")
+FULL = SCENARIO in ("full", "locked", "broken")
 DRIVE = SCRATCH / "drive"
 shutil.rmtree(DRIVE, ignore_errors=True)
 rng = np.random.default_rng(42)
@@ -256,6 +258,24 @@ if FULL:
         (manual / f"{lab}_form13f.zip").write_bytes(f13_zip(s_, i_))
     print(f"SEC data sets: {len(fs_files)} XBRL, {len(ins_files)} insider, {len(f13_files)} 13F zips")
 
+    # FRED series as saved by hand (fred.stlouisfed.org download button: <SERIES>.csv)
+    fred_dir = DRIVE / "aem-research" / "data" / "fred"
+    fred_dir.mkdir(parents=True)
+    days = pd.bdate_range("2011-01-03", "2025-12-31")
+    months = pd.date_range("2010-01-01", "2025-11-01", freq="MS")
+    walk = lambda n, s: np.round(np.cumsum(rng.normal(0, s, n)), 3)
+    for sid, idx, base, step, hdr in (("DFII10", days, 0.5, 0.02, "observation_date"),
+                                      ("DGS2", days, 1.0, 0.02, "observation_date"),
+                                      ("BAA10Y", days, 2.5, 0.01, "DATE"),
+                                      ("CPIAUCNS", months, 220.0, 0.0, "observation_date")):
+        vals = (base + walk(len(idx), step)) if step else base * np.cumprod(np.full(len(idx), 1.002))
+        body = "\n".join(f"{d:%Y-%m-%d},{'.' if k % 97 == 5 else round(float(v), 3)}" for k, (d, v) in enumerate(zip(idx, vals)))
+        (fred_dir / f"{sid}.csv").write_text(f"{hdr},{sid}\n{body}\n")
+    if SCENARIO == "broken":
+        bad = sorted(manual.glob("*_form13f.zip"))[3]
+        bad.write_bytes(bad.read_bytes()[:500])                  # a truncated download
+        (fred_dir / "BAA10Y.csv").write_text("not a csv at all")  # a corrupt hand-saved file
+
 # ---------- locked scenario: a copy of the repo with a finalized, locked pre-registration
 if SCENARIO == "locked":
     copy = SCRATCH / "repo_locked"
@@ -282,6 +302,14 @@ print(json.dumps(report["verdict"], indent=1))
 if FULL:
     assert report.get("features"), "Phase F did not build features"
     print("prelock:", report["prelock"])
+summary_text = (DRIVE / "aem-research" / "output" / "run_summary.txt").read_text()
+print(summary_text)
+if SCENARIO == "broken":
+    assert "ERROR     [F regime]" in summary_text, "the FRED failure is missing from the paste block"
+    assert "1 bad" in summary_text and "(bad " in summary_text, "the truncated 13F zip was not reported"
+    assert report.get("features"), "a bad 13F zip must not stop the features"
+elif FULL:
+    assert "ERRORS    none" in summary_text, "unexpected errors in a clean run"
 if SCENARIO == "locked":
     out = ns["result"]
     assert len(out) and set(out["status"]) <= {"complete", "delisted", "series_ended", "censored", "no_entry"}
