@@ -155,23 +155,31 @@ def _marker(cache_dir: Path, prefix: str, label: str) -> Path:
 def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: str,
             extract: Callable[[zipfile.ZipFile], dict[str, pd.DataFrame]], *,
             client=None, offline: bool = False, log=print,
-            local_dir: str | Path | None = None) -> tuple[dict[str, pd.DataFrame], dict]:
+            local_dir: str | Path | None = None, schema: str | None = None) -> tuple[dict[str, pd.DataFrame], dict]:
     """Run `extract` over every file, caching each file's tables on Drive.
 
     `local_dir` can hold zips downloaded by hand (same file names as on the SEC site);
     they are used before the network. Returns ({table name: all files concatenated},
     stats). A file the SEC does not have (404) is counted as missing and retried on
-    the next run.
+    the next run. With `schema`, a cached file extracted under a different schema (an
+    older tag list, say) is extracted again rather than reused.
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     tables: dict[str, list[pd.DataFrame]] = {}
     stats = {"files": len(items), "cached": 0, "downloaded": 0, "local": 0, "missing": 0, "bad": 0,
-             "missing_labels": [], "bad_labels": []}
+             "missing_labels": [], "bad_labels": [], "rebuilt": 0}
     for label, urls in items:
         mark = _marker(cache_dir, prefix, label)
         if mark.exists():
-            names = json.loads(mark.read_text(encoding="utf-8")).get("tables", [])
+            meta = json.loads(mark.read_text(encoding="utf-8"))
+            names = meta.get("tables", [])
+            if schema is not None and meta.get("schema") != schema:
+                names = None                       # extracted under another schema: rebuild it
+                stats["rebuilt"] += 1
+                if log:
+                    log(f"  {prefix} {label}: cached under an older schema – extracting again")
+        if mark.exists() and names is not None:
             loaded = {n: load_table(cache_dir / f"{prefix}_{label}_{n}") for n in names}
             if all(v is not None for v in loaded.values()):
                 for n, df in loaded.items():
@@ -207,8 +215,10 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
         for n, df in out.items():
             save_table(df, cache_dir / f"{prefix}_{label}_{n}")
             tables.setdefault(n, []).append(df)
-        mark.write_text(json.dumps({"tables": sorted(out), "rows": {n: int(len(d)) for n, d in out.items()},
-                                    "source": source}), encoding="utf-8")
+        meta = {"tables": sorted(out), "rows": {n: int(len(d)) for n, d in out.items()}, "source": source}
+        if schema is not None:
+            meta["schema"] = schema
+        mark.write_text(json.dumps(meta), encoding="utf-8")
         stats[source] += 1
         if log:
             log(f"  {prefix} {label}: " + ", ".join(f"{n} {len(d):,}" for n, d in out.items()))

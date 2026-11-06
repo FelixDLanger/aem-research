@@ -1,4 +1,5 @@
 import io
+import json
 import zipfile
 
 import numpy as np
@@ -142,3 +143,29 @@ def test_load_caches_per_quarter(tmp_path):
     subs2, facts2, stats2 = fsds.load(tmp_path, 2012, 2012, client=again, today=date(2013, 1, 10), log=None)
     assert stats2["cached"] == 1 and len(facts2) == len(facts)
     assert url not in again.requests                     # served from the Drive cache
+
+
+def test_paper_a_tags_are_extracted_and_a_schema_change_rebuilds_the_cache(tmp_path):
+    s, n = acme_rows()
+    k = s[0]                                                          # the FY2011 10-K
+    n = n + [num_row(k["adsh"], "OperatingIncomeLoss", k["period"], 4, 7.0e6),
+             num_row(k["adsh"], "DepreciationDepletionAndAmortization", k["period"], 4, 2.0e6),
+             num_row(k["adsh"], "InterestExpense", k["period"], 4, 1.0e6),
+             num_row(k["adsh"], "NetIncomeLoss", k["period"], 4, 3.0e6)]          # not wanted: dropped
+    url = "https://www.sec.gov/files/dera/data/financial-statement-data-sets/2012q4.zip"
+    from datetime import date
+    subs, facts, stats = fsds.load(tmp_path, 2012, 2012, client=FakeClient({url: fsds_zip(s, n)}),
+                                   today=date(2013, 1, 10), log=None)
+    tags = set(facts["tag"].astype(str))
+    assert {"OperatingIncomeLoss", "DepreciationDepletionAndAmortization", "InterestExpense"} <= tags
+    assert "NetIncomeLoss" not in tags
+    snap = fu.snapshots(facts, subs, ["2013-01-02"])
+    assert "operating_income" not in snap.columns                    # the AEM features are unchanged
+    mark = tmp_path / "fsds" / "fsds_2012q4.done.json"
+    meta = json.loads(mark.read_text())
+    assert meta["schema"] == fsds.SCHEMA
+    meta["schema"] = "older"                                          # a cache built with another tag list
+    mark.write_text(json.dumps(meta))
+    client = FakeClient({url: fsds_zip(s, n)})
+    _s, _f, st = fsds.load(tmp_path, 2012, 2012, client=client, today=date(2013, 1, 10), log=None)
+    assert st["rebuilt"] == 1 and st["downloaded"] == 1 and url in client.requests

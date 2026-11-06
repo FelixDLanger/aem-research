@@ -9,9 +9,17 @@ same filing that reports the current ones.
 The extract keeps 10-K and 10-Q filings and only the tags listed in TAG_GROUPS,
 non-dimensional and consolidated, in USD or shares. Share counts reported per class
 (a dimension) are kept separately so classes can be summed.
+
+The groups after "public_float" serve Paper A (operating income, depreciation and
+amortization, pre-tax income, interest: the EBITDA behind a take-private's entry and
+exit multiples); the AEM features ignore them. SCHEMA fingerprints the tag list, so a
+cached quarter extracted with a different list is rebuilt instead of silently lacking
+tags.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -50,10 +58,20 @@ TAG_GROUPS: dict[str, tuple[str, ...]] = {
                    "WeightedAverageNumberOfSharesOutstandingBasic"),
     "shares_dei": ("EntityCommonStockSharesOutstanding",),
     "public_float": ("EntityPublicFloat",),
+    # Paper A: EBITDA = operating income + depreciation and amortization; interest for coverage
+    "operating_income": ("OperatingIncomeLoss",),
+    "dna": ("DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+            "DepreciationAndAmortization", "Depreciation"),
+    "amortization": ("AmortizationOfIntangibleAssets",),
+    "pretax_income": ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+                      "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"),
+    "interest_expense": ("InterestExpense", "InterestExpenseDebt", "InterestAndDebtExpense"),
 }
 TAGS = {t: (g, i) for g, tags in TAG_GROUPS.items() for i, t in enumerate(tags)}
 UNITS = {"USD", "shares"}
 CLASS_SUMMED = {"EntityCommonStockSharesOutstanding"}
+SCHEMA = hashlib.sha1(json.dumps({"tags": TAG_GROUPS, "forms": PERIODIC_FORMS, "units": sorted(UNITS)},
+                                 sort_keys=True).encode()).hexdigest()[:12]
 
 
 def _ym(dates: pd.Series) -> pd.Series:
@@ -110,7 +128,7 @@ def load(sec_dir: str | Path, start_year: int, end_year: int, *, client=None, of
     """(subs, facts, stats) for every complete quarter, cached per quarter on Drive."""
     items = quarter_items(FSDS_URLS, start_year, end_year, today)
     tables, stats = process(items, Path(sec_dir) / "fsds", "fsds", extract_quarter, client=client,
-                            offline=offline, log=log, local_dir=local_dir)
+                            offline=offline, log=log, local_dir=local_dir, schema=SCHEMA)
     subs = tables.get("subs", pd.DataFrame(columns=["adsh", "cik", "form", "period", "fp", "filed", "sic"]))
     facts = tables.get("facts", pd.DataFrame(columns=["cik", "tag", "ym", "qtrs", "value", "dim", "filed", "adsh"]))
     if len(facts):
