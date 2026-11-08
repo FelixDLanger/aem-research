@@ -395,6 +395,43 @@ if sec_set_stats:
 REPORT["sec_datasets"] = SEC_SET_LINES
 """)
 
+md("""
+## Phase F – EODHD gap-fill (optional)
+
+The first run found that about a third of the companies in range in 2013 never appear in SimFin or Stooq – they delisted before those sources' coverage. With the Colab secret `EODHD_API_KEY`, this step downloads the end-of-day history of every listed or delisted US common stock that the SEC symbol bridges tie to an XBRL filer SimFin lacks (one call per ticker, saved on Drive in chunks), plus EODHD's ticker lists, which give the listing exchange for the delisting returns. Without the secret it uses whatever an earlier run saved, or is skipped.
+""")
+
+phase("F EODHD gap-fill", before="""
+# ── Phase F · EODHD gap-fill (optional) ──
+from aem_research import features as ft
+from aem_research.data import eodhd
+
+EOD_PRICES, EOD_EXCHANGE = None, None
+EOD_KEY = eodhd.resolve_key()
+EOD_DIR = paths.cache / "eodhd"
+""", body="""
+if EOD_KEY is None and not eodhd.cached(EOD_DIR):
+    print("No EODHD_API_KEY secret and no EODHD data on Drive – skipped; the survivorship gap shows as HOLES.")
+else:
+    eod_offline = OFFLINE or EOD_KEY is None
+    eod_client = None if eod_offline else eodhd.Client(EOD_KEY)
+    syms, sym_st = eodhd.symbol_lists(eod_client, EOD_DIR, offline=eod_offline)
+    EOD_EXCHANGE = eodhd.exchange_map(syms)
+    bridges0 = [b for b in (ins_bridge, ft.instance_bridge(subs) if subs is not None and len(subs) else None)
+                if b is not None and len(b)]
+    sim_ciks = (simfin.companies["cik"].dropna() if simfin.found and simfin.companies is not None
+                and "cik" in simfin.companies.columns else [])
+    want = eodhd.candidates(syms, bridges0, subs["cik"].unique() if subs is not None else [], sim_ciks)
+    print(f"EODHD candidates: {len(want):,} tickers ({int(want['delisted'].sum()):,} delisted) tie to XBRL filers SimFin lacks")
+    EOD_PRICES, eod_st = eodhd.fetch_eod(want["code"], eod_client, EOD_DIR, offline=eod_offline)
+    REPORT["eodhd"] = {"key": "colab secret" if EOD_KEY else "none (Drive cache only)",
+                       "symbols": f"{sym_st['symbols']:,} ({sym_st['source']})", "candidates": f"{len(want):,}",
+                       "fetched": eod_st["fetched"], "cached": eod_st["cached"], "empty": eod_st["empty"],
+                       "missing": eod_st["missing"], "tickers_with_prices": eod_st.get("tickers", 0),
+                       "exchange_map": f"{len(EOD_EXCHANGE):,}", "api_calls": eod_client.calls if eod_client else 0}
+    print(REPORT["eodhd"])
+""")
+
 phase("F features", before="""
 # ── Phase F · Features, universe, pre-lock and power checks (counts only – no returns) ──
 from aem_research import delistings as dl, features as ft, fundamentals as fu
@@ -404,7 +441,8 @@ FEATURES, DELIST, panel, PRELOCK, POWER, COVREP, holes, basis = None, None, None
 ST = cfg.get("starts")
 FORMATION = ft.formation_dates(ST["years"], ST.get("months", [1]))
 """, body="""
-panel = build_price_panel(simfin.prices if simfin.found else None, stq.prices if stq is not None else None)
+panel = build_price_panel(simfin.prices if simfin.found else None, stq.prices if stq is not None else None,
+                          gap_fill=EOD_PRICES)
 if panel.empty or facts is None or not len(facts):
     print("Features need prices and the XBRL data sets – skipped until both are on Drive.")
 else:
@@ -415,6 +453,10 @@ else:
                            max_gap_days=cfg.get("outcomes.max_gap_days", 120))
     bridges = [b for b in (ins_bridge, ft.instance_bridge(subs)) if b is not None and len(b)]
     keys = ft.ticker_ciks(pf, simfin.companies, bridges)
+    if EOD_PRICES is not None and len(EOD_PRICES):
+        n0 = len(pf)
+        pf, keys = eodhd.dedupe(pf, keys)
+        print(f"EODHD: {n0 - len(pf):,} ticker-dates dropped where SimFin or Stooq already price the company")
     print(f"Ticker → CIK: {keys['cik'].notna().mean():.1%} of ticker-dates mapped ({keys['cik_source'].value_counts().to_dict()})")
     fund = fu.snapshots(facts, subs, FORMATION, current_months=cfg.get("universe.current_filer_months", 15))
     ip = cfg.get("turnaround_cohort.insider_purchase")
@@ -464,7 +506,7 @@ else:
     seg = dl.map_ciks(dl.ended_segments(panel, as_of, stale_gap_days=cfg.get("outcomes.stale_gap_days", 30),
                                         max_gap_days=cfg.get("outcomes.max_gap_days", 120)),
                       simfin.companies, pd.concat(bridges, ignore_index=True) if bridges else None)
-    DELIST = dl.classify(seg, form25, merger, stq.groups if stq is not None else None)
+    DELIST = dl.classify(seg, form25, merger, stq.groups if stq is not None else None, exchange_map=EOD_EXCHANGE)
     REPORT["delistings"] = dl.summary(DELIST)
     show(pd.Series(REPORT["delistings"], name="ended series"))
     POWER = ft.power_table(FEATURES)
@@ -492,6 +534,7 @@ else:
     PRELOCK["h2b_cohort_windows"] = int(uni["h2b"].fillna(False).sum())
     PRELOCK["placebo_cohort_windows"] = int(uni["h2_placebo"].fillna(False).sum())
     REPORT["prelock"] = PRELOCK
+    REPORT["s1_gaps"] = ft.s1_gaps(FEATURES, first["H4"])
     REPORT["coverage_summary"] = {"universe_per_date_median": int(COVREP["universe"].median()),
                                   "universe_first_date": int(COVREP["universe"].iloc[0]),
                                   "universe_last_date": int(COVREP["universe"].iloc[-1])}
@@ -546,7 +589,9 @@ summary = {"run (UTC)": REPORT["generated_utc"], "repo commit": COMMIT, "config 
 uni_rows = None
 if FEATURES is not None:
     uni_rows = FEATURES.loc[FEATURES["in_universe"], [c for c in FEATURE_COLS if c in FEATURES.columns]]
-sheets = {"Summary": summary, "Coverage by date": COVREP, "Pre-lock checks": PRELOCK, "Power": POWER,
+prelock_sheet = {**(PRELOCK or {}), **{f"S1 gap: {k}": v for k, v in (REPORT.get("s1_gaps") or {}).items()},
+                 **{f"EODHD: {k}": v for k, v in (REPORT.get("eodhd") or {}).items()}} or None
+sheets = {"Summary": summary, "Coverage by date": COVREP, "Pre-lock checks": prelock_sheet, "Power": POWER,
           "Regime": REGIME, "Universe holes": holes, "Price basis": basis, "Delistings": DELIST,
           "SEC data sets": pd.DataFrame(sec_set_stats).T.reset_index() if sec_set_stats else None,
           "Universe windows": uni_rows}

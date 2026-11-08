@@ -42,13 +42,14 @@ Base rates for extreme multiples in US small caps, and whether the AEM screening
 | `aem_research/data/wsib.py` | Washington State Investment Board's quarterly private equity table, fund by fund |
 | `notebooks/02_paper_a_take_private_sample.ipynb` | Colab notebook for Paper A's sample – counts and entry-side data only until Paper A's lock |
 | `tests/` | Offline test suite on synthetic data in the SEC's published layouts – runs in the notebook before any data is touched |
-| `tools/` | `build_notebook.py` and `build_notebook_paper_a.py` generate the notebooks (edit cells there, not in the .ipynb); `e2e_synthetic.py` runs every cell of notebook 01 against a synthetic Drive in six scenarios, including truncated downloads, a corrupt FRED file and a planted failing test; `e2e_paper_a.py` runs notebook 02 on top of it, and on an empty Drive |
+| `tools/` | `build_notebook.py` and `build_notebook_paper_a.py` generate the notebooks (edit cells there, not in the .ipynb); `e2e_synthetic.py` runs every cell of notebook 01 against a synthetic Drive in seven scenarios, including truncated downloads, a corrupt FRED file, a planted failing test and an EODHD gap-fill; `e2e_paper_a.py` runs notebook 02 on top of it, and on an empty Drive |
 
 ## Run it
 
 1. Add a Colab secret `SEC_USER_AGENT` with `Your Name your@email` – the SEC asks automated clients to identify themselves.
 2. Download `d_us_txt.zip` from [stooq.com/db/h](https://stooq.com/db/h/) (U.S., Daily, ASCII – a CAPTCHA blocks automation) and save it, still zipped, to `My Drive/aem-research/data/stooq/`.
-3. Runtime → Run all. The first run downloads about 9 GB of SEC data sets and takes one to two hours. Each file is cached on Drive as it finishes, so after a disconnect, Run all resumes where it stopped. Later runs take minutes.
+3. Optional, after the first run: the Colab secret `EODHD_API_KEY` (one month of EODHD's All World plan) fills the survivorship gap the first run measured – delisted companies SimFin and Stooq lack – and gives every ticker's exchange. Confirm the licence for publication with EODHD first.
+4. Runtime → Run all. The first run downloads about 9 GB of SEC data sets and takes one to two hours. Each file is cached on Drive as it finishes, so after a disconnect, Run all resumes where it stopped. Later runs take minutes.
 
 If the SEC refuses downloads from Colab, save the zips on a computer under their original names into `My Drive/aem-research/data/sec/manual/`; the notebook uses them before the network.
 
@@ -85,7 +86,7 @@ The lock also refuses while `review_before_lock` lists open items. One remains: 
 
 ## Data and licences
 
-SimFin data is your own cached download. Stooq bulk files are for personal use. SEC EDGAR data and the SEC's structured data sets are public, subject to the SEC's fair-access policy. FRED needs no key; BAA10Y is Moody's copyrighted data, so the series and the regime table stay on Drive and the papers report estimates, not the series. EDGAR full-text search and the filings it finds are public; WSIB's quarterly reports are public documents, read with a generic client name. PCRI's deal-level database is for academic researchers through its own application and enclave; nothing from it enters this repository. Raw vendor data stays on Drive and is never committed here – `.gitignore` blocks data files, and a test fails if any appear in the repository.
+SimFin data is your own cached download. Stooq bulk files are for personal use. SEC EDGAR data and the SEC's structured data sets are public, subject to the SEC's fair-access policy. FRED needs no key; BAA10Y is Moody's copyrighted data, so the series and the regime table stay on Drive and the papers report estimates, not the series. EDGAR full-text search and the filings it finds are public; WSIB's quarterly reports are public documents, read with a generic client name. PCRI's deal-level database is for academic researchers through its own application and enclave; nothing from it enters this repository. EODHD data stay on Drive: its personal plans cover private research and keeping downloaded data, while publication is a separate use case to confirm with EODHD. Raw vendor data stays on Drive and is never committed here – `.gitignore` blocks data files, and a test fails if any appear in the repository.
 
 The code is licensed under the GNU Affero General Public License v3.0 (`LICENSE`).
 

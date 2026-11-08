@@ -245,3 +245,28 @@ def test_insider_sale_placebo():
     assert bool(f.loc["T00", "h2_placebo"]) and not bool(f.loc["T00", "h2a"])
     assert not bool(f.loc["T01", "h2_placebo"])                   # sold, but not fallen
     assert ft.coverage_report(f.reset_index())["placebo_cohort"].iloc[0] == 1
+
+
+def test_exchange_comes_from_the_exchange_row_of_the_same_accession_in_another_folder():
+    from aem_research import delistings as dl
+    seg = pd.DataFrame({"ticker": ["AAA", "BBB", "CCC~eod", "DDD"],
+                        "first_date": pd.to_datetime(["2010-01-04"] * 4),
+                        "last_date": pd.to_datetime(["2016-05-02", "2018-01-10", "2019-03-01", "2020-06-01"]),
+                        "last_price": [0.5, 0.4, 0.3, 0.2], "price_1y_before": [3.0, 2.0, 2.0, 2.0],
+                        "cik": pd.array([1001, 2002, 3003, 4004], dtype="Int64")})
+    f25 = pd.DataFrame({
+        "cik": [1001, 1120193, 2002, 876661],
+        "company": ["AAA CORP", "NASDAQ STOCK MARKET LLC", "BBB INC", "New York Stock Exchange LLC"],
+        "form": ["25-NSE"] * 4,
+        "date_filed": pd.to_datetime(["2016-05-12", "2016-05-12", "2014-02-03", "2014-02-03"]),
+        # the real index lists each CIK's row under its own folder: same accession, different path
+        "filename": ["edgar/data/1001/0001120193-16-000123.txt", "edgar/data/1120193/0001120193-16-000123.txt",
+                     "edgar/data/2002/0000876661-14-000045.txt", "edgar/data/876661/0000876661-14-000045.txt"]})
+    ex = dl.form25_with_exchange(f25)
+    assert ex.set_index("cik").loc[1001, "exchange"] == "nasdaq" and ex.set_index("cik").loc[2002, "exchange"] == "nyse_amex"
+    emap = pd.DataFrame({"ticker": ["CCC"], "exchange": ["nasdaq"]})
+    c = dl.classify(seg, f25, None, None, exchange_map=emap).set_index("ticker")["category"]
+    assert c["AAA"] == "performance_nasdaq"                     # Form 25-NSE filed by Nasdaq near the last day
+    assert c["BBB"] == "performance_nyse_amex"                  # the issuer's earlier NYSE Form 25
+    assert c["CCC~eod"] == "performance_nasdaq"                 # from the symbol list (EODHD)
+    assert c["DDD"] == "performance"                            # nothing known: the exchange stays open

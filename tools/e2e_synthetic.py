@@ -1,7 +1,7 @@
 """End-to-end check: build a synthetic Drive, then execute every notebook code cell in order.
 
 Usage (outside Colab, no network):
-    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked|broken|testsfail]
+    python tools/e2e_synthetic.py <scratch_dir> <repo_dir> [full|nocik_nostooq|empty|locked|broken|testsfail|eodhd]
 Scenarios:
   full           SimFin with CIKs and ISINs, a Stooq zip, SEC index caches, and the SEC data
                  sets (XBRL, Form 4, 13F) as hand-downloaded zips in data/sec/manual
@@ -14,6 +14,9 @@ Scenarios:
                  bad 13F zip, keep the other FRED series, and list all three in the paste block
   testsfail      as full, on a copy of the repo with one planted failing test: the run must
                  stop at the test cell and print the paste block with the failing test
+  eodhd          as full, but 30 delisted companies are missing from SimFin (the survivorship
+                 gap) and an earlier EODHD download of them is on Drive: the gap-fill must put
+                 them back into the panel without a key
 Every scenario must finish with exit code 0.
 """
 import contextlib
@@ -33,7 +36,7 @@ import pandas as pd
 SCRATCH = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SCENARIO = sys.argv[3] if len(sys.argv) > 3 else "full"
-FULL = SCENARIO in ("full", "locked", "broken", "testsfail")
+FULL = SCENARIO in ("full", "locked", "broken", "testsfail", "eodhd")
 DRIVE = SCRATCH / "drive"
 shutil.rmtree(DRIVE, ignore_errors=True)
 rng = np.random.default_rng(42)
@@ -59,8 +62,9 @@ for i, t in enumerate(tickers):
 prices = pd.concat(rows).set_index(["Ticker", "Date"])
 raw = DRIVE / "cvm-research" / "data" / "raw"
 raw.mkdir(parents=True)
+GAP = tickers[:30] if SCENARIO == "eodhd" else []             # delisted names SimFin never had
 if SCENARIO != "empty":
-    prices.to_pickle(raw / "us_prices.pkl")
+    prices.drop(index=GAP, level="Ticker").to_pickle(raw / "us_prices.pkl")
 comp = pd.DataFrame({"Ticker": tickers, "SimFinId": [9000 + i for i in range(n)],
                      "Company Name": [f"{t} CORP" for t in tickers],
                      "ISIN": [f"US{cusips[t]}0" for t in tickers],
@@ -68,7 +72,19 @@ comp = pd.DataFrame({"Ticker": tickers, "SimFinId": [9000 + i for i in range(n)]
 if SCENARIO == "nocik_nostooq":
     comp = comp.drop(columns=["CIK", "ISIN"])
 if SCENARIO != "empty":
-    comp.to_pickle(raw / "us_companies.pkl")
+    comp.drop(index=GAP).to_pickle(raw / "us_companies.pkl")
+if GAP:                                                       # an earlier EODHD download, saved on Drive
+    sys.path.insert(0, str(REPO))
+    from aem_research.io_utils import save_table as _save
+    eod_dir = DRIVE / "aem-research" / "cache" / "eodhd"
+    eod_dir.mkdir(parents=True)
+    _save(pd.DataFrame({"code": GAP, "name": [f"{x} CORP" for x in GAP], "exchange": "NASDAQ", "type": "Common Stock",
+                        "isin": None, "delisted": True}), eod_dir / "eodhd_symbols")
+    (eod_dir / "eodhd_symbols.json").write_text(json.dumps({"fetched": "2026-11-08", "rows": len(GAP)}))
+    g = prices.loc[GAP].reset_index()
+    _save(pd.DataFrame({"code": g["Ticker"], "date": g["Date"].dt.strftime("%Y-%m-%d"), "close": g["Close"],
+                        "adjusted_close": g["Adj. Close"], "volume": g["Volume"]}), eod_dir / "eodhd_prices_0000")
+    _save(pd.DataFrame({"code": GAP, "chunk": 0, "rows": 1, "first_date": None, "last_date": None}), eod_dir / "eodhd_index")
 
 # ---------- synthetic Stooq zip: survivors overlap SimFin; 20 delisted names SimFin lacks; ETFs
 stq_dir = DRIVE / "aem-research" / "data" / "stooq"
@@ -354,6 +370,17 @@ if SCENARIO == "broken":
     assert "end   B Stooq: FAILED" in progress
 elif FULL:
     assert "ERRORS    none" in summary_text and "WARNING" not in summary_text, "unexpected problems in a clean run"
+    assert "S1 GAPS   s1_unknown" in summary_text, "the S1 breakdown is missing"
+if SCENARIO == "eodhd":
+    from aem_research.io_utils import load_table
+    feats = load_table(DRIVE / "aem-research" / "cache" / "features")
+    eod = feats[feats["ticker"].astype(str).str.endswith("~eod")]
+    import re
+    n_eod = int(re.search(r"tickers_with_prices (\d+)", summary_text).group(1))
+    assert "EODHD     key none (Drive cache only)" in summary_text and n_eod >= 20, n_eod
+    assert eod["ticker"].nunique() >= 20 and eod["in_universe"].any(), "EODHD names did not reach the universe"
+    print(f"EODHD gap-fill: {eod['ticker'].nunique()} names back in the panel, "
+          f"{int(eod['in_universe'].sum())} universe windows")
 if SCENARIO == "locked":
     out = ns["result"]
     assert len(out) and set(out["status"]) <= {"complete", "delisted", "series_ended", "censored", "no_entry"}

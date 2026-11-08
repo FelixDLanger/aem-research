@@ -38,7 +38,8 @@ def paste_block(report: dict) -> str:
                      f" · {f.get('tickers_in_universe', 0):,} tickers · price from 13F {_pct(f.get('price_from_13f'))}"
                      f" · attention signal {f.get('attention_signal')}")
     for key, label in (("coverage_summary", "COVERAGE "), ("prelock", "PRE-LOCK  "), ("delistings", "DELISTED  "),
-                       ("price_basis", "PRICES    "), ("holes", "HOLES     "), ("regime_summary", "REGIME    ")):
+                       ("price_basis", "PRICES    "), ("holes", "HOLES     "), ("regime_summary", "REGIME    "),
+                       ("eodhd", "EODHD     "), ("s1_gaps", "S1 GAPS   ")):
         if r.get(key):
             items = r[key].items() if isinstance(r[key], dict) else []
             lines.append(label + " · ".join(f"{k} {_pct(x) if isinstance(x, float) and abs(x) <= 1 else x}" for k, x in items))

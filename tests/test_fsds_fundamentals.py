@@ -169,3 +169,27 @@ def test_paper_a_tags_are_extracted_and_a_schema_change_rebuilds_the_cache(tmp_p
     client = FakeClient({url: fsds_zip(s, n)})
     _s, _f, st = fsds.load(tmp_path, 2012, 2012, client=client, today=date(2013, 1, 10), log=None)
     assert st["rebuilt"] == 1 and st["downloaded"] == 1 and url in client.requests
+
+
+def test_cover_page_shares_stand_in_when_weighted_average_shares_are_missing():
+    """No weighted-average tags (common for single-class small caps that tag only the cover):
+    shares a year apart from the cover page keep dilution and S1 known, on one basis."""
+    k11, k12 = "0000777-12-000001", "0000777-13-000001"
+    subs = [sub_row(k11, 777, "10-K", "20111231", "FY", "20120305", name="COVER ONLY INC"),
+            sub_row(k12, 777, "10-K", "20121231", "FY", "20130305", name="COVER ONLY INC")]
+    nums = []
+    for adsh, P, prior, rev, ocf in ((k11, "20111231", "20101231", 100e6, 10e6), (k12, "20121231", "20111231", 120e6, 18e6)):
+        nums += [num_row(adsh, "Revenues", P, 4, rev), num_row(adsh, "Revenues", prior, 4, rev / 1.2),
+                 num_row(adsh, "NetCashProvidedByUsedInOperatingActivities", P, 4, ocf),
+                 num_row(adsh, "NetCashProvidedByUsedInOperatingActivities", prior, 4, ocf * 0.6),
+                 num_row(adsh, "PaymentsToAcquirePropertyPlantAndEquipment", P, 4, 2e6),
+                 num_row(adsh, "PaymentsToAcquirePropertyPlantAndEquipment", prior, 4, 2e6)]
+    nums += [num_row(k11, "EntityCommonStockSharesOutstanding", "20120229", 0, 10e6, "shares", version="dei/2011"),
+             num_row(k12, "EntityCommonStockSharesOutstanding", "20130228", 0, 11e6, "shares", version="dei/2012")]
+    with zipfile.ZipFile(io.BytesIO(fsds_zip(subs, nums))) as zf:
+        ex = fsds.extract_quarter(zf)
+    snap = fu.snapshots(ex["facts"], ex["subs"], ["2013-04-01"]).set_index("cik").loc[777]
+    assert snap["share_basis"] == "cover page" and snap["wad_now"] == 11e6 and snap["wad_prev"] == 10e6
+    assert snap["share_growth"] == pytest.approx(0.10) and not snap["low_dilution"]
+    assert pd.notna(snap["s1_proxy"])                                   # known now: FCF/share vs revenue growth
+    assert snap["fcf_ps"] == pytest.approx(16e6 / 11e6)

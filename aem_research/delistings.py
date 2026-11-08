@@ -80,9 +80,13 @@ def form25_with_exchange(form25: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     f = form25.copy()
     f["is_exchange"] = f["company"].map(is_exchange_name)
-    ex = f[f["is_exchange"]].assign(exchange=lambda d: d["company"].map(exchange_label))[["filename", "exchange"]]
-    ex = ex.drop_duplicates("filename")
-    iss = f[~f["is_exchange"]].merge(ex, on="filename", how="left")
+    # The index lists a filing once per CIK, each under that CIK's own folder
+    # (edgar/data/<cik>/<accession>.txt), so the issuer and the exchange share the
+    # accession number, not the path.
+    f["accession"] = f["filename"].astype(str).str.rsplit("/", n=1).str[-1]
+    ex = f[f["is_exchange"]].assign(exchange=lambda d: d["company"].map(exchange_label))[["accession", "exchange"]]
+    ex = ex.drop_duplicates("accession")
+    iss = f[~f["is_exchange"]].merge(ex, on="accession", how="left")
     iss["exchange"] = iss["exchange"].fillna("")
     iss["date_filed"] = pd.to_datetime(iss["date_filed"]).astype("datetime64[ns]")
     return iss[cols].reset_index(drop=True)
@@ -121,9 +125,14 @@ def map_ciks(segments: pd.DataFrame, companies: pd.DataFrame | None = None,
 
 def classify(segments: pd.DataFrame, form25: pd.DataFrame | None = None, merger: pd.DataFrame | None = None,
              stooq_groups: pd.DataFrame | None = None, *, before_days: int = 365, after_days: int = 30,
-             form25_days: int = 60, penny: float = 1.0, collapse: float = 0.5) -> pd.DataFrame:
+             form25_days: int = 60, penny: float = 1.0, collapse: float = 0.5,
+             exchange_map: pd.DataFrame | None = None) -> pd.DataFrame:
     """Delisting records for the outcome engine: ticker, delist_date, category, delist_return
-    (always missing here), plus the evidence used. `segments` needs a cik column (map_ciks)."""
+    (always missing here), plus the evidence used. `segments` needs a cik column (map_ciks).
+
+    The exchange comes from an exchange-filed Form 25 near the last trading day, else the
+    issuer's latest exchange-filed Form 25 before it, else Stooq's group, else
+    `exchange_map` (ticker → nasdaq / nyse_amex, e.g. EODHD's symbol lists)."""
     s = segments.copy().reset_index(drop=True)
     if s.empty:
         return pd.DataFrame(columns=["ticker", "delist_date", "category", "delist_return", "cik", "evidence"])
@@ -150,13 +159,24 @@ def classify(segments: pd.DataFrame, form25: pd.DataFrame | None = None, merger:
         s.loc[nse["index"].unique(), "f25_nse"] = True
         ex = near[near["exchange"].isin(["nasdaq", "nyse_amex"])].drop_duplicates("index")
         s.loc[ex["index"].to_numpy(), "f25_exchange"] = ex["exchange"].to_numpy()
+        # else the latest exchange-filed Form 25 for the issuer up to the last trading day
+        early = j[j["exchange"].isin(["nasdaq", "nyse_amex"])
+                  & (j["date_filed"] <= j["last_date"] + pd.Timedelta(days=form25_days))]
+        early = early.sort_values("date_filed").drop_duplicates("index", keep="last")
+        empty = s.loc[early["index"].to_numpy(), "f25_exchange"].eq("").to_numpy()
+        s.loc[early["index"].to_numpy()[empty], "f25_exchange"] = early["exchange"].to_numpy()[empty]
     s["stooq_exchange"] = ""
     if stooq_groups is not None and len(stooq_groups):
         g = stooq_groups.drop_duplicates("ticker").set_index("ticker")["group"].map(stooq_exchange)
         s["stooq_exchange"] = s["ticker"].map(g).fillna("")
+    s["map_exchange"] = ""
+    if exchange_map is not None and len(exchange_map):
+        em = exchange_map.drop_duplicates("ticker").set_index("ticker")["exchange"]
+        s["map_exchange"] = s["ticker"].astype(str).str.split("~").str[0].map(em).fillna("")
     collapsed = (s["last_price"] < penny) | (s["last_price"] <= collapse * s["price_1y_before"])
     performance = ~s["merger"] & (collapsed | s["f25_nse"])
     exch = s["f25_exchange"].where(s["f25_exchange"].ne(""), s["stooq_exchange"])
+    exch = exch.where(exch.ne(""), s["map_exchange"])
     cat = np.where(s["merger"], "merger",
                    np.where(performance,
                             np.where(exch.eq("nasdaq"), "performance_nasdaq",

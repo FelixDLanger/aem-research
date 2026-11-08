@@ -337,6 +337,31 @@ def check_point_in_time(features: pd.DataFrame) -> None:
         assert_point_in_time(sub, start_col="start_date", available_col=col)
 
 
+def s1_gaps(features: pd.DataFrame, start) -> dict:
+    """Why S1 is unknown, as shares of universe windows from `start` (counts only).
+
+    no_share_pair: no share count a year apart; no_fcf_pair: shares known but free cash
+    flow missing in one of the years; no_revenue_growth: both free cash flows per share
+    positive but revenue growth unknown. Plus the unknowns that are financial firms, and
+    how many windows use cover-page shares instead of weighted-average shares."""
+    if features is None or not len(features):
+        return {}
+    u = features[features["in_universe"].astype(bool) & (features["start_date"] >= pd.Timestamp(start))]
+    if not len(u):
+        return {}
+    col = lambda c: u[c] if c in u.columns else pd.Series(np.nan, index=u.index)  # noqa: E731
+    unk = col("s1_proxy").isna()
+    no_shares = col("share_growth").isna()
+    no_fcf = ~no_shares & (col("fcf_ps").isna() | col("fcf_ps_prev").isna())
+    fin = pd.to_numeric(col("sic"), errors="coerce").between(6000, 6799)
+    return {"s1_unknown": round(float(unk.mean()), 4),
+            "no_share_pair": round(float((unk & no_shares).mean()), 4),
+            "no_fcf_pair": round(float((unk & no_fcf).mean()), 4),
+            "no_revenue_growth": round(float((unk & ~no_shares & ~no_fcf).mean()), 4),
+            "unknown_and_financial": round(float((unk & fin).mean()), 4),
+            "cover_page_shares": round(float(col("share_basis").astype(str).eq("cover page").mean()), 4)}
+
+
 def coverage_report(features: pd.DataFrame, *, h4_start=None) -> pd.DataFrame:
     """Counts only, per start date: universe size, share of each feature known, cohort sizes."""
     u = features[features["in_universe"]]

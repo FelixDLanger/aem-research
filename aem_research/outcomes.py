@@ -282,7 +282,8 @@ def panel_as_of(panel: pd.DataFrame) -> pd.Timestamp | None:
 
 
 def build_price_panel(simfin_prices: pd.DataFrame | None, stooq_prices: pd.DataFrame | None,
-                      simfin_col: str = "adj_close", *, keep_volume: bool = True) -> pd.DataFrame:
+                      simfin_col: str = "adj_close", *, keep_volume: bool = True,
+                      gap_fill: pd.DataFrame | None = None) -> pd.DataFrame:
     """One price series per ticker: SimFin where it has the ticker, Stooq for the rest.
 
     No mixing inside a ticker. Known limitation: a symbol reused by a different company
@@ -312,6 +313,13 @@ def build_price_panel(simfin_prices: pd.DataFrame | None, stooq_prices: pd.DataF
         qp = qp[~qp["ticker"].isin(taken)]
         qp["source"] = "stooq"
         parts.append(qp)
+    if gap_fill is not None and len(gap_fill):
+        # series already in panel form, under their own ticker names (EODHD: "<CODE>~eod")
+        cols = ["ticker", "date", "price", "source"] + [c for c in ("close_raw", "volume")
+                                                        if keep_volume and c in gap_fill.columns]
+        ex = gap_fill[cols].copy()
+        ex["ticker"] = ex["ticker"].astype(str)
+        parts.append(ex)
     if not parts:
         return pd.DataFrame(columns=["ticker", "date", "price", "source"])
     out = pd.concat(parts, ignore_index=True)

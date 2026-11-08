@@ -283,8 +283,11 @@ starts:
 
 price_panel:
   sources: >-
-    SimFin cache first; Stooq for symbols SimFin lacks; EODHD only if the coverage
-    audit recommends it. One source per symbol, never mixed inside a series.
+    SimFin cache first; Stooq for symbols SimFin lacks; EODHD (recommended by the first
+    run's audit, Nov 8, 2026) for listed and delisted common stocks the SEC symbol
+    bridges tie to XBRL filers SimFin lacks. One source per symbol, never mixed inside
+    a series; where EODHD and another source price the same company on a start date,
+    the other source wins.
   as_of: >-
     The earliest of the sources' last dates, so a source that ends sooner never looks
     like a wave of delistings.
@@ -329,9 +332,12 @@ delisting:
       No merger evidence, and the last close is below US$1, or at most half the close a
       year earlier, or the exchange filed Form 25-NSE.
     exchange: >-
-      The exchange named on Form 25-NSE, else the listing folder in the Stooq file. NYSE
-      and NYSE American (formerly NYSE MKT and AMEX) take performance_nyse_amex, Nasdaq
-      takes performance_nasdaq, an unknown exchange takes performance.
+      The exchange that filed Form 25-NSE near the last trading day (the index lists the
+      exchange's row of the same accession), else the issuer's latest exchange-filed
+      Form 25 before it, else the listing folder in the Stooq file, else the EODHD
+      symbol lists. NYSE and NYSE American (formerly NYSE MKT and AMEX) take
+      performance_nyse_amex, Nasdaq takes performance_nasdaq, an unknown exchange takes
+      performance.
     unknown: Neither kind of evidence.
   bounds: >-
     Every imputed delisting is also reported with a lower bound (total loss of the last
@@ -381,8 +387,13 @@ features:
   net_cash: cash and equivalents plus short-term investments less debt, at the latest balance-sheet date
   dilution: >-
     Change in weighted-average diluted shares against the same period a year earlier;
-    low dilution means below 2%.
-  s1_proxy: free cash flow per share positive now and a year earlier, and growing faster than revenue
+    where that pair is missing, the cover-page shares outstanding of the filings known
+    on the start date and a year before it (same basis both years; amended before the
+    lock, Nov 8, 2026, after the first run found S1 known for 73.2% of windows); low
+    dilution means below 2%.
+  s1_proxy: >-
+    free cash flow per share positive now and a year earlier, and growing faster than
+    revenue; shares as in dilution
   missing: >-
     H2 and H4 use the windows whose inputs are all known at the start date; the share
     left out is reported. A company with no Form 4 purchase on file counts as having
@@ -477,3 +488,10 @@ data_sources:
   sec_insider_transactions: "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{year}q{q}_form345.zip"
   sec_form13f: "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/"
   insider_history_start_year: 2009    # Cohen-Malloy-Pomorski needs three prior years of trades
+  eodhd:
+    secret: EODHD_API_KEY            # Colab secret; never in code or output
+    plan: EOD Historical Data – All World, one month
+    use: end-of-day history of listed and delisted US common stocks SimFin lacks; exchange of every US ticker
+    licence: >-
+      personal plans cover private research and keeping downloaded data; publication is
+      a separate use case – confirm with EODHD before Paper B is published
