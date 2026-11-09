@@ -215,6 +215,7 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
         wad_last[fill] = now[fill]
     out["shares_wad_last"] = wad_last
     out["shares_bs"] = look.get("shares_bs", cik, P, 0)          # outstanding at the balance-sheet date
+    out["shares_bs_prev"] = look.get("shares_bs", cik, P - 12, 0)  # a year earlier (dilution, S1)
 
     out = out.merge(_dei_shares(prep, cutoff), on="cik", how="left")
     # Shares for the market cap: the anchor filing's cover page where the data sets carry it,
@@ -234,15 +235,19 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
     pf = vals[vals["group"] == "public_float"].sort_values("filed").drop_duplicates("cik", keep="last")
     out = out.merge(pf[["cik", "value"]].rename(columns={"value": "public_float"}), on="cik", how="left")
 
-    # No weighted-average pair: cover-page shares a year apart (point in time, same basis both years).
+    # No weighted-average pair: balance-sheet counts a year apart, else cover-page counts a year
+    # apart (point in time, same basis both years).
     prev = _dei_shares(prep, cutoff - pd.Timedelta(days=365))[["cik", "shares_dei"]].rename(
         columns={"shares_dei": "shares_dei_prev"})
     out = out.merge(prev, on="cik", how="left")
     have_wad = out["wad_now"].notna() & out["wad_prev"].notna()
-    use_cover = ~have_wad & (out["shares_dei"] > 0) & (out["shares_dei_prev"] > 0)
-    out["share_basis"] = np.where(have_wad, "weighted average", np.where(use_cover, "cover page", ""))
-    out["wad_now"] = out["wad_now"].where(have_wad, out["shares_dei"].where(use_cover))
-    out["wad_prev"] = out["wad_prev"].where(have_wad, out["shares_dei_prev"].where(use_cover))
+    use_bs = ~have_wad & (out["shares_bs"] > 0) & (out["shares_bs_prev"] > 0)
+    use_cover = ~have_wad & ~use_bs & (out["shares_dei"] > 0) & (out["shares_dei_prev"] > 0)
+    out["share_basis"] = np.where(have_wad, "weighted average",
+                                  np.where(use_bs, "balance sheet", np.where(use_cover, "cover page", "")))
+    out["wad_now"] = out["wad_now"].where(have_wad, out["shares_bs"].where(use_bs, out["shares_dei"].where(use_cover)))
+    out["wad_prev"] = out["wad_prev"].where(have_wad, out["shares_bs_prev"].where(use_bs,
+                                                                                  out["shares_dei_prev"].where(use_cover)))
     out["share_growth"] = out["wad_now"] / out["wad_prev"] - 1.0
 
     fcf_ps = out["fcf"] / out["wad_now"]

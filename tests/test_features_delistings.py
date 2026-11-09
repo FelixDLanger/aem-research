@@ -322,3 +322,16 @@ def test_formation_dates_from_a_pair_or_a_range():
     rng = ft.formation_dates(range(2009, 2013), [1, 4, 7, 10])        # once read as 2009-2010 only
     assert rng[-1] == pd.Timestamp("2012-10-01") and len(rng) == 16
     assert ft.formation_dates((2009, 2012), [1]) == [pd.Timestamp(f"{y}-01-01") for y in range(2009, 2013)]
+
+
+def test_a_missing_sic_code_is_no_spac_shell():
+    """With a nullable SIC column, True & NA is NA – the company must not quietly drop out."""
+    s, panel, companies, fund, ins, breadth = feature_inputs()
+    fund["sic"] = pd.array([3571] * 10 + [pd.NA, 6770], dtype="Int64")      # T10 has no SIC code on file
+    pf = ft.price_features(panel, [s])
+    f = ft.assemble(pf, ft.ticker_ciks(pf, companies, []), fund, ins, breadth, load_config(CONFIG).data)
+    by = f.set_index("ticker")
+    assert bool(by.loc["T10", "in_universe"]) and not bool(by.loc["T11", "in_universe"])
+    from aem_research import diagnostics as dg
+    fun = dg.universe_funnel(f, load_config(CONFIG).data).set_index("filter")
+    assert fun.loc["universe flag", "so_far"] == fun.loc["listed", "so_far"]           # the funnel agrees

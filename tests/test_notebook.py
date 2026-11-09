@@ -1,6 +1,8 @@
 import json
 import re
 
+import pytest
+
 from conftest import ROOT
 
 NOTEBOOK = ROOT / "notebooks" / "01_aem_base_rate_skeleton.ipynb"
@@ -89,3 +91,19 @@ def test_notebooks_match_their_builders(tmp_path):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
+
+
+def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
+    from aem_research import env
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D):
+        stamp = env.notebook_build(nb_path)
+        assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
+        setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
+                             if c["cell_type"] == "code")["source"])
+        assert f'check_notebook_fresh(REPO_DIR, "{nb_path.name}", NOTEBOOK_BUILD' in setup
+    # an older copy stops with a pointer to the README link; the current one passes
+    (tmp_path / "notebooks").mkdir()
+    (tmp_path / "notebooks" / NOTEBOOK.name).write_text(NOTEBOOK.read_text(encoding="utf-8"), encoding="utf-8")
+    assert env.check_notebook_fresh(tmp_path, NOTEBOOK.name, env.notebook_build(NOTEBOOK)) == env.notebook_build(NOTEBOOK)
+    with pytest.raises(env.StaleNotebook, match="README link"):
+        env.check_notebook_fresh(tmp_path, NOTEBOOK.name, "0" * 12)

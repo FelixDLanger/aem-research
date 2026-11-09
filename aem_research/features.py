@@ -263,8 +263,10 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
         f["listed"] = False
     else:
         f["listed"] = True
-    sic = pd.to_numeric(f["sic"], errors="coerce")       # after the merges: aligned with f's rows
-    f["in_universe"] = (f["is_filer"] & (sic != 6770)
+    # a missing SIC code is no SPAC shell: with a nullable SIC column, True & NA would be NA and
+    # then False, so companies without a code would quietly drop out
+    not_spac = ~pd.to_numeric(f["sic"], errors="coerce").astype("float64").eq(6770)
+    f["in_universe"] = (f["is_filer"] & not_spac
                         & (f["entry_price_unadjusted"] >= float(u.get("min_price_usd", 1.0)))
                         & f["market_cap"].between(float(cap.get("min", 1e8)), float(cap.get("max", 2e9)))
                         & f["liquid"] & f["listed"])
@@ -318,8 +320,8 @@ def calibrate_breadth(features: pd.DataFrame, cfg_data: dict, ks=range(1, 501), 
     u = cfg_data.get("universe", {})
     cap = u.get("market_cap_usd", {}) or {}
     f = features
-    sic = pd.to_numeric(f["sic"], errors="coerce")
-    base = (f["fund_available"].notna() & (sic != 6770)
+    not_spac = ~pd.to_numeric(f["sic"], errors="coerce").astype("float64").eq(6770)
+    base = (f["fund_available"].notna() & not_spac
             & (f["entry_price_unadjusted"] >= float(u.get("min_price_usd", 1.0)))
             & f["market_cap"].between(float(cap.get("min", 1e8)), float(cap.get("max", 2e9))))
     b = pd.to_numeric(f["breadth"], errors="coerce")
@@ -426,7 +428,7 @@ def s1_gaps(features: pd.DataFrame, start) -> dict:
     no_share_pair: no share count a year apart; no_fcf_pair: shares known but free cash
     flow missing in one of the years; no_revenue_growth: both free cash flows per share
     positive but revenue growth unknown. Plus the unknowns that are financial firms, and
-    how many windows use cover-page shares instead of weighted-average shares."""
+    how many windows use balance-sheet or cover-page shares instead of weighted-average shares."""
     if features is None or not len(features):
         return {}
     u = features[features["in_universe"].astype(bool) & (features["start_date"] >= pd.Timestamp(start))]
@@ -442,6 +444,7 @@ def s1_gaps(features: pd.DataFrame, start) -> dict:
             "no_fcf_pair": round(float((unk & no_fcf).mean()), 4),
             "no_revenue_growth": round(float((unk & ~no_shares & ~no_fcf).mean()), 4),
             "unknown_and_financial": round(float((unk & fin).mean()), 4),
+            "balance_sheet_shares": round(float(col("share_basis").astype(str).eq("balance sheet").mean()), 4),
             "cover_page_shares": round(float(col("share_basis").astype(str).eq("cover page").mean()), 4)}
 
 

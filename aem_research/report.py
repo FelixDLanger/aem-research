@@ -18,7 +18,8 @@ def paste_block(report: dict) -> str:
     lines = [
         "AEM RUN SUMMARY – paste everything between the rulers into the chat",
         "=" * 72,
-        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · config {str(r.get('config_sha256', ''))[:12]} "
+        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
+        f"· config {str(r.get('config_sha256', ''))[:12]} "
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
     ]
     if "simfin" in r or "stooq" in r:
@@ -110,7 +111,8 @@ def paper_a_block(report: dict) -> str:
     lines = [
         "PAPER A RUN SUMMARY – paste everything between the rulers into the chat",
         "=" * 72,
-        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · config A {str(r.get('config_sha256', ''))[:12]} "
+        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
+        f"· config A {str(r.get('config_sha256', ''))[:12]} "
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
     ]
     for key, label in (("inputs", "INPUTS    "), ("index", "INDEX     "), ("search", "SEARCH    "),

@@ -81,6 +81,12 @@ from aem_research.env import resolve_paths
 from aem_research.io_utils import load_table, show
 
 COMMIT = _git("-C", REPO_DIR, "rev-parse", "--short", "HEAD").stdout.strip() or "n/a"
+# a hash of this notebook's cells, set by its builder: an older copy (Colab keeps an opened
+# notebook as it was) would run the newest code with old steps, so it stops here instead
+NOTEBOOK_BUILD = "__BUILD__"
+from aem_research.env import check_notebook_fresh
+check_notebook_fresh(REPO_DIR, "03_universe_a_diagnostic.ipynb", NOTEBOOK_BUILD,
+                     colab_url="https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb")
 cfg = load_config(os.path.join(REPO_DIR, "config", "preregistration.yaml"))
 paths = resolve_paths(DRIVE_ROOT, cfg.get("data_sources.simfin_cache_dirs"))
 print(f"aem_research {aem_research.__version__} @ {COMMIT} · pandas {pd.__version__} · numpy {np.__version__}")
@@ -136,7 +142,8 @@ def _fmt(d):
 
 
 lines = ["AEM DIAGNOSTIC 03 – paste everything between the rulers into the chat", "=" * 72,
-         f"repo {COMMIT} · pandas {pd.__version__} · numpy {np.__version__} · notebook 01 run {REP.get('generated_utc', 'n/a')} "
+         f"repo {COMMIT} · notebook {NOTEBOOK_BUILD} · pandas {pd.__version__} · numpy {np.__version__} · "
+         f"notebook 01 run {REP.get('generated_utc', 'n/a')} "
          f"(repo {REP.get('repo_commit', 'n/a')}) · holders minimum {K}",
          "FUNNEL A  " + _fmt(dg.funnel_summary(FUN_A)),
          "FUNNEL V  " + _fmt(dg.funnel_summary(FUN_V)),
@@ -164,6 +171,11 @@ def to_source(text):
     lines = text.split("\n")
     return [line + "\n" for line in lines[:-1]] + [lines[-1]]
 
+
+# the build stamp: a hash of every cell with the placeholder in place, so it is reproducible
+import hashlib  # noqa: E402
+_BUILD = hashlib.sha256("\x1e".join(text for _, text in CELLS).encode("utf-8")).hexdigest()[:12]
+CELLS = [(kind, text.replace("__BUILD__", _BUILD)) for kind, text in CELLS]
 
 cells = []
 for i, (kind, text) in enumerate(CELLS):

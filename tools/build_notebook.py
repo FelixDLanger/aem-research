@@ -105,6 +105,12 @@ import aem_research
 from aem_research.io_utils import save_table, show, write_json
 
 COMMIT = _git("-C", REPO_DIR, "rev-parse", "--short", "HEAD").stdout.strip() or "n/a"
+# a hash of this notebook's cells, set by its builder: an older copy (Colab keeps an opened
+# notebook as it was) would run the newest code with old steps, so it stops here instead
+NOTEBOOK_BUILD = "__BUILD__"
+from aem_research.env import check_notebook_fresh
+check_notebook_fresh(REPO_DIR, "01_aem_base_rate_skeleton.ipynb", NOTEBOOK_BUILD,
+                     colab_url="https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb")
 print(f"aem_research {aem_research.__version__} @ {COMMIT} · pandas {pd.__version__} · Colab: {IN_COLAB}")
 """)
 
@@ -117,7 +123,8 @@ LOG = RunLog()
 cfg = load_config(os.path.join(REPO_DIR, "config", "preregistration.yaml"))
 print(cfg.summary())
 REPORT = {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-          "repo_commit": COMMIT, "config_sha256": cfg.sha256, "lock_status": cfg.status, "versions": versions()}
+          "repo_commit": COMMIT, "notebook_build": NOTEBOOK_BUILD, "config_sha256": cfg.sha256,
+          "lock_status": cfg.status, "versions": versions()}
 """)
 
 code("""
@@ -891,6 +898,11 @@ def to_source(text):
     lines = text.split("\n")
     return [line + "\n" for line in lines[:-1]] + [lines[-1]]
 
+
+# the build stamp: a hash of every cell with the placeholder in place, so it is reproducible
+import hashlib  # noqa: E402
+_BUILD = hashlib.sha256("\x1e".join(text for _, text in CELLS).encode("utf-8")).hexdigest()[:12]
+CELLS = [(kind, text.replace("__BUILD__", _BUILD)) for kind, text in CELLS]
 
 cells = []
 for i, (kind, text) in enumerate(CELLS):
