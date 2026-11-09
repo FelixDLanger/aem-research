@@ -68,8 +68,11 @@ def run_notebook(repo: Path, drive: Path) -> str:
 
 
 def outcome_files(drive: Path) -> list:
+    """The files notebook 04 writes. In a locked repository notebook 01's own Phase E leaves
+    its files too (aem_outcomes.xlsx, the B table outcomes_b); those are not notebook 04's."""
     out = drive / "aem-research" / "output"
-    return sorted(p.name for p in out.iterdir() if p.name.startswith("outcomes") or p.name == "aem_results_h1.xlsx")
+    return sorted(p.name for p in out.iterdir()
+                  if p.name.split(".")[0] == "outcomes" or p.name == "aem_results_h1.xlsx")
 
 
 # ok: the lock names this run

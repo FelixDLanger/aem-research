@@ -96,10 +96,12 @@ def results_block(report: dict) -> str:
     v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
     lock = r.get("lock") or {}
     dr = lock.get("data_run") or {}
+    status, when = r.get("lock_status", ""), lock.get("locked_at_utc")
+    state = (f"locked {when}" if status == "locked" and when
+             else f"{status}, locked {when}" if when else status)
     lines = [f"AEM RESULTS {v_} – paste everything between the rulers into the chat", "=" * 72,
              f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
-             f"{r.get('notebook_build', 'n/a')} · config {str(r.get('config_sha256', ''))[:12]} ({r.get('lock_status', '')}"
-             + (f", locked {lock.get('locked_at_utc')}" if lock.get("locked_at_utc") else "") + ")"
+             f"{r.get('notebook_build', 'n/a')} · config {str(r.get('config_sha256', ''))[:12]} ({state})"
              + (f" · data run v{dr.get('release')} {dr.get('repo_commit')} {dr.get('generated_utc')}" if dr else "")]
     problems = r.get("problems") or []
     lines.append("CHECKS    " + ("lock ok · data run ok · gates all passed in the data run" if not problems
@@ -145,7 +147,8 @@ def _run_lines(r: dict) -> list[str]:
     run = r.get("run") or {}
     if run.get("phases"):
         lines.append("PHASES    " + " · ".join(f"{p['phase']} {p['status']} {p['seconds']}s" for p in run["phases"]))
-        lines.append(f"TIME      {run.get('total_minutes')} min · Drive use {r.get('drive_gb', '?')} GB")
+        drive = f" · Drive use {r['drive_gb']} GB" if r.get("drive_gb") is not None else ""
+        lines.append(f"TIME      {run.get('total_minutes')} min{drive}")
         rose, top = [], 0.0                        # peak memory only rises: show where it rose
         for p in run["phases"]:
             if p.get("ram_gb") is not None and p["ram_gb"] > top:

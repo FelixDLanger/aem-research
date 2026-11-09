@@ -53,7 +53,10 @@ def test_results_block_and_failed_gates():
          "h1": {"touch": touch, "buckets": buckets}, "run": {}}
     lines = results_block(r).splitlines()
     assert lines[0] == "AEM RESULTS v8 – paste everything between the rulers into the chat"
-    assert "data run v7 93fe068 2026-11-09 15:20 UTC" in lines[2] and "locked 2026-11-09T15:55:00Z" in lines[2]
+    assert "data run v7 93fe068 2026-11-09 15:20 UTC" in lines[2] and "(locked 2026-11-09T15:55:00Z)" in lines[2]
+    assert "locked, locked" not in lines[2]
+    assert "(mismatch, locked 2026-11-09T15:55:00Z)" in results_block({**r, "lock_status": "mismatch"}).splitlines()[2]
+    assert "(unlocked)" in results_block({**r, "lock_status": "unlocked", "lock": {}}).splitlines()[2]
     assert "CHECKS    lock ok · data run ok · gates all passed in the data run" in lines
     assert "OUTCOMES  start_windows 58,652 · complete 120,000" in lines
     assert "H1 TOUCH  pooled · 3y: 3x 8.1% 10x 0.9% (50,000 windows, 3,500 firms)" in lines

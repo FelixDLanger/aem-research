@@ -227,6 +227,9 @@ def test_warnings_and_memory_reach_the_paste_block():
     assert "RAM       peak" in block and "F features" in block
     assert "WARNING   [F regime] FRED BAA10Y missing, so credit_spread_baa is not computed (HTTP 404)" in block
     assert "ERRORS    none" in block
+    assert "Drive use 0.1 GB" in block
+    # a notebook that does not measure Drive (notebook 04) shows no placeholder
+    assert "Drive use" not in paste_block({"run": d}) and "TIME      " in paste_block({"run": d})
 
 
 def test_an_unreadable_fred_file_costs_only_that_series(tmp_path):
