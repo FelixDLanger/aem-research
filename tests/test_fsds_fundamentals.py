@@ -193,3 +193,14 @@ def test_cover_page_shares_stand_in_when_weighted_average_shares_are_missing():
     assert snap["share_growth"] == pytest.approx(0.10) and not snap["low_dilution"]
     assert pd.notna(snap["s1_proxy"])                                   # known now: FCF/share vs revenue growth
     assert snap["fcf_ps"] == pytest.approx(16e6 / 11e6)
+
+
+def test_cover_page_shares_at_any_date_without_snapshots(extracted):
+    """The pre-sample calibration needs share counts on dates the snapshots do not cover."""
+    s = fu.dei_shares_at(extracted["facts"], ["2012-04-02", "2013-01-02"]).set_index(["cik", "start_date"])
+    assert s.loc[(1001, pd.Timestamp("2012-04-02")), "shares_dei"] == pytest.approx(10.1e6)
+    assert s.loc[(1001, pd.Timestamp("2013-01-02")), "shares_dei"] == pytest.approx(10.3e6)
+    assert s.loc[(1002, pd.Timestamp("2013-01-02")), "shares_dei"] == pytest.approx(10e6)      # classes summed
+    assert (1002, pd.Timestamp("2012-04-02")) not in s.index                                  # not filed yet
+    assert s.loc[(1001, pd.Timestamp("2013-01-02")), "shares_dei_filed"] == pd.Timestamp("2012-11-05")
+    assert fu.dei_shares_at(extracted["facts"].iloc[0:0], ["2013-01-02"]).empty

@@ -313,3 +313,12 @@ def test_hole_keys_match_the_hole_counts():
     allf = pd.concat([fund, ghost], ignore_index=True)
     keys = ft.universe_hole_keys(allf, f, sym)
     assert keys["cik"].tolist() == [500]                                    # 501 is above the size range
+
+
+def test_formation_dates_from_a_pair_or_a_range():
+    from aem_research import features as ft
+    pair = ft.formation_dates([2013, 2023], [1, 4, 7, 10])
+    assert pair[0] == pd.Timestamp("2013-01-01") and pair[-1] == pd.Timestamp("2023-10-01") and len(pair) == 44
+    rng = ft.formation_dates(range(2009, 2013), [1, 4, 7, 10])        # once read as 2009-2010 only
+    assert rng[-1] == pd.Timestamp("2012-10-01") and len(rng) == 16
+    assert ft.formation_dates((2009, 2012), [1]) == [pd.Timestamp(f"{y}-01-01") for y in range(2009, 2013)]

@@ -494,7 +494,7 @@ save_report()
 
 phase("F features", before="""
 # ── Phase F · Features, universe, pre-lock and power checks (counts only – no returns) ──
-from aem_research import delistings as dl, features as ft, fundamentals as fu, secprices
+from aem_research import delistings as dl, diagnostics as dg, features as ft, fundamentals as fu, secprices
 from aem_research.outcomes import build_price_panel, panel_as_of
 
 FEATURES, DELIST, panel, PRELOCK, POWER, COVREP, holes, basis = None, None, None, None, None, None, None, None
@@ -624,7 +624,14 @@ else:
         SEC_CHECK["liquidity_agreement"] = LIQ.get("agreement")
         SEC_CHECK["listed_share"] = round(float(listed["listed"].mean()), 4) if len(listed) else None
         REPORT["sec_check"] = SEC_CHECK
+        REPORT["liquidity"] = LIQ
         show(pd.Series(SEC_CHECK, name="SEC panel checks"))
+        # why A is the size it is: each filter alone, so far and without it; B's windows looked up in A
+        FUNNEL_A = dg.universe_funnel(FEATURES, cfg.data, start=first_a)
+        show(FUNNEL_A)
+        REPORT["funnel_a"] = dg.funnel_summary(FUNNEL_A)
+        REPORT["a_vs_v"] = dg.compare_universes(FEATURES, FEATURES_V, cfg.data, start=first_a, min_breadth=LIQ["k"])
+        show(pd.Series(REPORT["a_vs_v"], name="vendor universe windows, looked up in A"))
     print(f"Attention signal for H4: {att} (breadth known for {att_share:.0%} of H4 windows; rule: 80%)")
     COVREP = ft.coverage_report(FEATURES)
     show(COVREP)
@@ -695,21 +702,39 @@ CALIB = None
 if panel is None or panel.empty:
     print("No vendor panel – skipped.")
 else:
-    pre_dates = ft.formation_dates(range(2009, 2013), ST.get("months", [1]))
+    pre_dates = ft.formation_dates((2009, 2012), ST.get("months", [1]))
     pfp = ft.price_features(panel, pre_dates, tolerance_days=ST.get("entry_tolerance_days", 7),
                             max_gap_days=cfg.get("outcomes.max_gap_days", 120))
+    # size as in the study: the cover-page share count filed within 15 months, else the vendor's
+    keys_p = ft.ticker_ciks(pfp, simfin.companies if simfin.found else None,
+                            globals().get("bridges") or [])
+    pfp = pfp.merge(keys_p[["ticker", "start_date", "cik"]], on=["ticker", "start_date"], how="left")
+    dei_p = fu.dei_shares_at(facts, pre_dates) if facts is not None and len(facts) else pd.DataFrame()
+    if len(dei_p):
+        pfp = pfp.merge(dei_p.assign(cik=dei_p["cik"].astype("Int64")), on=["cik", "start_date"], how="left")
+    else:
+        pfp["shares_dei"], pfp["shares_dei_filed"] = np.nan, pd.NaT
+    fresh = (pd.to_datetime(pfp["shares_dei_filed"]) >= pfp["start_date"] - pd.DateOffset(months=15)).to_numpy()
+    shares = (pd.to_numeric(pfp["shares_dei"], errors="coerce").where(fresh)
+              .fillna(pd.to_numeric(pfp["shares_vendor"], errors="coerce")))
+    mcap = pfp["entry_close_raw"] * shares
     capr = cfg.get("universe.market_cap_usd")
-    mcap = pfp["entry_close_raw"] * pfp["shares_vendor"]
-    sel = pfp[(pfp["entry_close_raw"] >= cfg.get("universe.min_price_usd", 1.0)) & mcap.between(capr["min"], capr["max"])
-              & (pfp["dollar_volume_20d"] >= cfg.get("universe.min_median_dollar_volume_20d_usd", 1e5))]
+    keep = ((pfp["entry_close_raw"] >= cfg.get("universe.min_price_usd", 1.0)) & mcap.between(capr["min"], capr["max"])
+            & (pfp["dollar_volume_20d"] >= cfg.get("universe.min_median_dollar_volume_20d_usd", 1e5))).to_numpy()
+    sel = pfp[keep]
+    print(f"Calibration windows: {len(sel):,} on {sel['start_date'].nunique()} start dates "
+          f"({pre_dates[0].date()} to {pre_dates[-1].date()}); share counts from filings for "
+          f"{float(fresh[keep].mean()) if keep.any() else 0:.0%}, the vendor's for the rest")
     spec = OutcomeSpec.from_config(cfg.data)
     CALIB = touch_sampling_ratios(spec, panel, sel[["ticker", "start_date"]], sample_start=FORM_ALL[0],
                                   horizons=(3, 5), quarterly_max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
     show(CALIB)
-    if len(CALIB):
-        c3 = CALIB[CALIB["horizon_years"] == 3]
-        REPORT["calibration"] = {"windows_3y": int(c3["windows"].max()) if len(c3) else 0,
-                                 **{f"3y_{m:g}x": v for m, v in zip(c3["multiple"], c3["quarter_end_over_daily"])}}
+    c3 = CALIB[CALIB["horizon_years"] == 3] if len(CALIB) else CALIB
+    REPORT["calibration"] = {"start_dates": f"{pre_dates[0].date()} to {pre_dates[-1].date()}",
+                             "windows_selected": int(len(sel)),
+                             "shares_from_filings": round(float(fresh[keep].mean()), 4) if keep.any() else 0.0,
+                             "windows_3y": int(c3["windows"].max()) if len(c3) else 0,
+                             **{f"3y_{m:g}x": v for m, v in zip(c3["multiple"], c3["quarter_end_over_daily"])}}
 """, after="""
 save_report()
 """)

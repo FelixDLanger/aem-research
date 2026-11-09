@@ -21,9 +21,14 @@ H4_SIGNALS = ("s1_proxy", "insider_any", "insider_cluster", "insider_opportunist
 
 
 def formation_dates(years, months=(1,)) -> list[pd.Timestamp]:
-    """Calendar start dates (the 1st of each month); the entry is the first close on or after it."""
-    y0, y1 = int(years[0]), int(years[1])
-    return [pd.Timestamp(year=y, month=int(m), day=1) for y in range(y0, y1 + 1) for m in months]
+    """Calendar start dates (the 1st of each month); the entry is the first close on or after it.
+
+    `years` is a (first, last) pair, both included (the config's starts.years), or any other
+    sequence of years – a range object is taken as the years it holds."""
+    ys = [int(y) for y in years]
+    if len(ys) == 2 and not isinstance(years, range):
+        ys = list(range(ys[0], ys[1] + 1))
+    return [pd.Timestamp(year=y, month=int(m), day=1) for y in sorted(set(ys)) for m in months]
 
 
 def price_features(panel: pd.DataFrame, starts, *, tolerance_days: int = 7, lookback_years: int = 3,
@@ -287,7 +292,7 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
     return f
 
 
-def calibrate_breadth(features: pd.DataFrame, cfg_data: dict, ks=range(1, 41), floor: int = 3) -> dict:
+def calibrate_breadth(features: pd.DataFrame, cfg_data: dict, ks=range(1, 501), floor: int = 3) -> dict:
     """The 13F-holder count that best stands in for the dollar-volume screen (D10).
 
     On the vendor panel's windows that pass every other universe filter and have both

@@ -241,6 +241,29 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
     return out
 
 
+def dei_shares_at(facts: pd.DataFrame, cutoffs) -> pd.DataFrame:
+    """(cik, start_date, shares_dei, shares_dei_filed): the latest cover-page share count filed
+    before each cutoff (classes summed), from the share-count facts alone – a light version
+    of the snapshot's shares for dates the snapshots do not cover (the pre-sample calibration)."""
+    cols = ["cik", "start_date", "shares_dei", "shares_dei_filed"]
+    if facts is None or not len(facts) or "tag" not in facts.columns:
+        return pd.DataFrame(columns=cols)
+    f = facts[facts["tag"].astype(str).isin(CLASS_SUMMED)]
+    if f.empty:
+        return pd.DataFrame(columns=cols)
+    prep = prepare(f)
+    parts = []
+    for c in cutoffs:
+        s = _dei_shares(prep, pd.Timestamp(c))
+        if len(s):
+            parts.append(s.assign(start_date=pd.Timestamp(c)))
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    out = pd.concat(parts, ignore_index=True)
+    out["start_date"] = pd.to_datetime(out["start_date"]).astype("datetime64[ns]")
+    return out[cols]
+
+
 def snapshots(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15,
               log=None, extra_flows: tuple = (), prep: dict | None = None) -> pd.DataFrame:
     prep = prep if prep is not None else prepare(facts)
