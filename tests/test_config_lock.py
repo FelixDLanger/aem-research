@@ -126,3 +126,18 @@ def test_amendment_needs_force_and_keeps_history(final_config):
     payload = json.loads((final_config.parent / "LOCK.json").read_text())
     assert payload["history"][0]["config_sha256"] == first["config_sha256"]
     assert load_config(final_config).status == "locked"
+
+
+def test_the_lock_names_its_data_run_and_checks_a_saved_run_against_it(final_config):
+    from aem_research.config import data_run_problems
+    run = {"repo_commit": "93fe068", "release": 7, "notebook_build": "ff3c80f02063",
+           "generated_utc": "2026-11-09 15:20 UTC", "extra": "ignored"}
+    assert data_run_problems(load_config(final_config), run) == ["the pre-registration is not locked (status unlocked)"]
+    rec = lock_config(final_config, note="gates passed in the data run", now=FIXED, data_run=run)
+    assert rec["data_run"] == {k: run[k] for k in ("repo_commit", "release", "notebook_build", "generated_utc")}
+    cfg = load_config(final_config)
+    assert cfg.locked and data_run_problems(cfg, run) == []
+    later = {**run, "generated_utc": "2026-11-10 08:00 UTC"}              # a later run of the same version
+    assert data_run_problems(cfg, later) == ["generated_utc: the run on Drive has '2026-11-10 08:00 UTC', "
+                                             "the lock names '2026-11-09 15:20 UTC'"]
+    assert data_run_problems(cfg, None) == ["notebook 01's run report is not on Drive"]

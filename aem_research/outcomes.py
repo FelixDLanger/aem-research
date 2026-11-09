@@ -328,6 +328,56 @@ def base_rates(outcomes: pd.DataFrame, multiples=(3.0, 10.0), group_cols=("horiz
     return out.reset_index()
 
 
+H1_MULTIPLES = (3.0, 10.0)
+H1_HORIZONS = (3, 5)
+H1_BUCKET_HORIZON = 5
+REGIME_SPLIT = "2022-01-01"
+
+
+def h1_tables(outcomes: pd.DataFrame, spec: OutcomeSpec | None = None, *, multiples=H1_MULTIPLES,
+              horizons=H1_HORIZONS, bucket_horizon: int = H1_BUCKET_HORIZON,
+              regime_split=REGIME_SPLIT) -> dict:
+    """H1 as pre-registered: the share of resolved windows (complete, delisted, series ended;
+    censored and no-entry excluded) that touched 3x and 10x within 3 and 5 years, and the
+    distribution of five-year end multiples on the six-bucket grid with its mean (and the
+    means of its delisting bounds) – pooled, by start year, and by regime (start dates
+    before 2022 versus 2022 and later). A firm is a CIK (a series id without its ~segment).
+
+    Returns {"touch": scope, group, horizon_years, windows, firms, touch_<m>x ...;
+             "buckets": scope, group, windows, firms, share_<label>x ..., mean, mean_lower, mean_upper}."""
+    spec = spec or OutcomeSpec()
+    o = outcomes[outcomes["status"].isin([COMPLETE, DELISTED, ENDED])].copy()
+    o["firm"] = o["ticker"].astype(str).str.split("~").str[0]
+    start = _ns(o["start_date"])
+    o["start_year"] = start.dt.year.astype("Int64").astype(str)
+    o["regime"] = np.where(start < pd.Timestamp(regime_split), "before 2022", "2022 and later")
+    scopes = (("pooled", None), ("regime", "regime"), ("start year", "start_year"))
+    touch, buckets = [], []
+    for scope, key in scopes:
+        groups = [("all", o)] if key is None else sorted(o.groupby(key), key=lambda kv: str(kv[0]))
+        for g, d in groups:
+            for h in horizons:
+                x = d[d["horizon_years"] == h]
+                if not len(x):
+                    continue
+                row = {"scope": scope, "group": str(g), "horizon_years": int(h), "windows": int(len(x)),
+                       "firms": int(x["firm"].nunique())}
+                for m in multiples:
+                    row[touch_col(m)] = round(float(pd.to_numeric(x[touch_col(m)], errors="coerce").mean()), 4)
+                touch.append(row)
+            x = d[d["horizon_years"] == bucket_horizon]
+            if len(x):
+                row = {"scope": scope, "group": str(g), "windows": int(len(x)), "firms": int(x["firm"].nunique())}
+                b = pd.to_numeric(x["bucket"], errors="coerce")
+                for lab in spec.bucket_labels:
+                    row[f"share_{lab:g}x"] = round(float((b == lab).mean()), 4)
+                for col, name in (("end_multiple", "mean"), ("end_multiple_lower", "mean_lower"),
+                                  ("end_multiple_upper", "mean_upper")):
+                    row[name] = round(float(pd.to_numeric(x[col], errors="coerce").mean()), 4)
+                buckets.append(row)
+    return {"touch": pd.DataFrame(touch), "buckets": pd.DataFrame(buckets)}
+
+
 def panel_as_of(panel: pd.DataFrame) -> pd.Timestamp | None:
     """The earliest of the sources' last dates (pre-registered price_panel.as_of).
 

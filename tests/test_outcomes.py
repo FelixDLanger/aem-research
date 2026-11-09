@@ -202,3 +202,35 @@ def test_quarter_end_touches_miss_spikes_and_stay_outside_the_sample():
     assert r.iloc[0]["quarter_end_over_daily"] == 0.0 and r.iloc[0]["windows"] == 1
     with pytest.raises(ValueError, match="before the sample"):
         touch_sampling_ratios(SPEC, p, starts.assign(start_date=pd.Timestamp("2013-01-01")), sample_start="2013-01-01")
+
+
+def test_h1_tables_pooled_by_regime_and_start_year():
+    from aem_research.outcomes import h1_tables
+    rows = []
+    # four 5-year windows and four 3-year windows: two firms (one with two series), two regimes
+    for t, s, h, st, t3, t10, em, b in [
+            ("CIK1", "2015-01-02", 5, "complete", 1.0, 0.0, 3.0, 2.5),
+            ("CIK1~2", "2016-01-04", 5, "delisted", 0.0, 0.0, 0.5, 0.4),
+            ("CIK2", "2015-01-02", 5, "complete", 1.0, 1.0, 12.0, 10.0),
+            ("CIK2", "2016-01-04", 5, "censored", np.nan, np.nan, np.nan, np.nan),
+            ("CIK1", "2015-01-02", 3, "complete", 1.0, 0.0, 2.0, 1.0),
+            ("CIK2", "2022-01-03", 3, "series_ended", 0.0, 0.0, 0.7, 1.0),
+            ("CIK2", "2023-01-02", 3, "complete", 0.0, 0.0, 1.1, 1.0),
+            ("CIK2", "2023-04-03", 3, "no_entry", np.nan, np.nan, np.nan, np.nan)]:
+        rows.append({"ticker": t, "start_date": pd.Timestamp(s), "horizon_years": h, "status": st,
+                     "touch_3x": t3, "touch_10x": t10, "end_multiple": em, "end_multiple_lower": em * 0.5,
+                     "end_multiple_upper": em, "bucket": b})
+    out = h1_tables(pd.DataFrame(rows))
+    t, bk = out["touch"], out["buckets"]
+    pooled = t[t["scope"] == "pooled"].set_index("horizon_years")
+    assert pooled.loc[5, "windows"] == 3 and pooled.loc[5, "firms"] == 2           # censored left out, ~2 is CIK1
+    assert pooled.loc[5, "touch_3x"] == pytest.approx(2 / 3, abs=1e-4) and pooled.loc[5, "touch_10x"] == pytest.approx(1 / 3, abs=1e-4)
+    assert pooled.loc[3, "windows"] == 3 and pooled.loc[3, "touch_3x"] == pytest.approx(1 / 3, abs=1e-4)
+    reg = t[(t["scope"] == "regime") & (t["horizon_years"] == 3)].set_index("group")
+    assert reg.loc["before 2022", "windows"] == 1 and reg.loc["2022 and later", "windows"] == 2
+    years = t[t["scope"] == "start year"]
+    assert set(years["group"]) == {"2015", "2016", "2022", "2023"}
+    b = bk[bk["scope"] == "pooled"].iloc[0]
+    assert b["windows"] == 3 and b["share_2.5x"] == pytest.approx(1 / 3, abs=1e-4) and b["share_0.4x"] == pytest.approx(1 / 3, abs=1e-4)
+    assert b["share_10x"] == pytest.approx(1 / 3, abs=1e-4) and b["share_0.1x"] == 0.0
+    assert b["mean"] == pytest.approx((3.0 + 0.5 + 12.0) / 3, abs=1e-4) and b["mean_lower"] == pytest.approx(b["mean"] / 2, abs=1e-4)

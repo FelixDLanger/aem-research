@@ -67,6 +67,7 @@ def test_paper_a_notebook_is_valid_and_compiles():
 
 
 NOTEBOOK_D = ROOT / "notebooks" / "03_universe_a_diagnostic.ipynb"
+NOTEBOOK_R = ROOT / "notebooks" / "04_results.ipynb"
 
 
 def test_diagnostic_notebook_is_valid_and_reads_only():
@@ -87,7 +88,7 @@ def test_notebooks_match_their_builders(tmp_path):
     import subprocess
     import sys
     for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
-                        ("build_notebook_diag.py", NOTEBOOK_D)):
+                        ("build_notebook_diag.py", NOTEBOOK_D), ("build_notebook_results.py", NOTEBOOK_R)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
@@ -95,7 +96,7 @@ def test_notebooks_match_their_builders(tmp_path):
 
 def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     from aem_research import env
-    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D):
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R):
         stamp = env.notebook_build(nb_path)
         assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
         setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
@@ -114,7 +115,7 @@ def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
     from aem_research import env
     rel = aem_research.RELEASE
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D)):
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R)):
         assert env.notebook_release(nb_path) == rel, nb_path.name
         cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
         title = "".join(cells[0]["source"]).splitlines()[0]
@@ -133,3 +134,16 @@ def test_paste_blocks_lead_with_the_release():
     assert paste_block({"release": 7}).splitlines()[2].startswith("v7 · run ")
     assert paper_a_block({"release": 7}).splitlines()[0].startswith("PAPER A RUN SUMMARY v7 – ")
     assert paste_block({}).splitlines()[0].startswith("AEM RUN SUMMARY v? – ")
+
+
+def test_results_notebook_is_valid_and_computes_nothing_before_its_checks():
+    nb = json.loads(NOTEBOOK_R.read_text(encoding="utf-8"))
+    codes = [c for c in nb["cells"] if c["cell_type"] == "code"]
+    for i, cell in enumerate(codes):
+        assert cell["outputs"] == [] and cell["execution_count"] is None
+        assert not re.search(r"^\s*[!%]", "".join(cell["source"]), flags=re.M)
+        compile("".join(cell["source"]), f"cell-{i}", "exec")
+    checks, results = "".join(codes[1]["source"]), "".join(codes[2]["source"])
+    assert "data_run_problems(cfg, RUN)" in checks and "failed_gates(RUN)" in checks
+    assert results.startswith("# ── Outcomes") and "if not problems:" in results.splitlines()[2]
+    assert "SecClient" not in "".join("".join(c["source"]) for c in codes)        # no downloads

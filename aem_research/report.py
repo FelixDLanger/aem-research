@@ -74,6 +74,71 @@ def paste_block(report: dict) -> str:
     return "\n".join(lines)
 
 
+def failed_gates(report: dict | None) -> list[str]:
+    """The pre-lock checks a notebook-01 run failed (its PRE-LOCK entries marked BELOW or
+    ABOVE); a run without pre-lock checks fails as such."""
+    pl = (report or {}).get("prelock") or {}
+    if not pl:
+        return ["the run has no pre-lock checks"]
+    return [f"{k} {v}" for k, v in pl.items() if isinstance(v, str) and ("BELOW" in v or "ABOVE" in v)]
+
+
+def _pc(v) -> str:
+    try:
+        return f"{100 * float(v):.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def results_block(report: dict) -> str:
+    """Notebook 04's paste block: the checks, the outcome statuses and H1 (counts and rates)."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lock = r.get("lock") or {}
+    dr = lock.get("data_run") or {}
+    lines = [f"AEM RESULTS {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · config {str(r.get('config_sha256', ''))[:12]} ({r.get('lock_status', '')}"
+             + (f", locked {lock.get('locked_at_utc')}" if lock.get("locked_at_utc") else "") + ")"
+             + (f" · data run v{dr.get('release')} {dr.get('repo_commit')} {dr.get('generated_utc')}" if dr else "")]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("lock ok · data run ok · gates all passed in the data run" if not problems
+                                 else "STOPPED – " + " · ".join(problems)))
+    o = r.get("outcomes") or {}
+    if o:
+        lines.append("OUTCOMES  " + " · ".join(f"{k} {x:,}" if isinstance(x, int) else f"{k} {x}" for k, x in o.items()))
+    h1 = r.get("h1") or {}
+    touch = h1.get("touch") or []
+    buckets = h1.get("buckets") or []
+
+    def tline(rows):
+        return " · ".join(f"{x['horizon_years']}y: 3x {_pc(x.get('touch_3x'))} 10x {_pc(x.get('touch_10x'))} "
+                          f"({x['windows']:,} windows, {x['firms']:,} firms)" for x in rows)
+
+    def bline(x):
+        shares = " · ".join(f"{k.split('_')[1]} {_pc(val)}" for k, val in x.items() if k.startswith("share_"))
+        return (f"{shares} · mean {x['mean']:.2f} (bounds {x['mean_lower']:.2f} to {x['mean_upper']:.2f}) · "
+                f"{x['windows']:,} windows")
+
+    pooled = [x for x in touch if x["scope"] == "pooled"]
+    if pooled:
+        lines.append("H1 TOUCH  pooled · " + tline(pooled))
+    for g in ("before 2022", "2022 and later"):
+        rows = [x for x in touch if x["scope"] == "regime" and x["group"] == g]
+        if rows:
+            lines.append(f"REGIME    {g} · " + tline(rows))
+    for x in buckets:
+        if x["scope"] in ("pooled", "regime"):
+            lines.append(f"H1 5Y     {x['group'] if x['scope'] == 'regime' else 'pooled'} · " + bline(x))
+    for h, m in ((3, "3x"), (5, "10x")):
+        rows = [x for x in touch if x["scope"] == "start year" and x["horizon_years"] == h]
+        if rows:
+            lines.append(f"BY YEAR   {h}y touch {m}: " + " · ".join(f"{x['group']} {_pc(x.get('touch_' + m))}" for x in rows))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 def _run_lines(r: dict) -> list[str]:
     """Phases, time, memory, warnings and errors – the audit trail shared by both papers."""
     lines = []

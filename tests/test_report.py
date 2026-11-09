@@ -28,3 +28,38 @@ def test_paste_block_shows_the_sec_panel_lines():
     assert "SPLITS    from_holders 812" in block and "SEC CHECK returns_agree 97.0%" in block
     assert "ROBUST B  sec_fill_windows 9000" in block and "CALIB     3y_3x 78.0%" in block
     assert "RESULT B  horizon_years 3 · touch_3x 0.12" in block
+
+
+def test_results_block_and_failed_gates():
+    from aem_research.report import failed_gates, results_block
+    assert failed_gates({"prelock": {"fcf_known": "96.7% ok", "split_recall": "75.3% BELOW 90%",
+                                     "delisting_unknown": "27.0% ABOVE 25%", "universe_windows": 58652}}) == \
+        ["split_recall 75.3% BELOW 90%", "delisting_unknown 27.0% ABOVE 25%"]
+    assert failed_gates({}) == ["the run has no pre-lock checks"]
+    touch = [{"scope": "pooled", "group": "all", "horizon_years": 3, "windows": 50000, "firms": 3500,
+              "touch_3x": 0.081, "touch_10x": 0.009},
+             {"scope": "regime", "group": "before 2022", "horizon_years": 3, "windows": 40000, "firms": 3000,
+              "touch_3x": 0.09, "touch_10x": 0.01},
+             {"scope": "start year", "group": "2014", "horizon_years": 3, "windows": 5000, "firms": 1300,
+              "touch_3x": 0.07, "touch_10x": 0.0}]
+    buckets = [{"scope": "pooled", "group": "all", "windows": 30000, "firms": 2800, "share_0.1x": 0.2,
+                "share_0.4x": 0.25, "share_1x": 0.3, "share_2.5x": 0.15, "share_5x": 0.07, "share_10x": 0.03,
+                "mean": 1.37, "mean_lower": 1.21, "mean_upper": 1.42}]
+    r = {"release": 8, "generated_utc": "2026-11-09 16:00 UTC", "repo_commit": "abc1234", "notebook_build": "x" * 12,
+         "config_sha256": "f" * 64, "lock_status": "locked",
+         "lock": {"locked_at_utc": "2026-11-09T15:55:00Z",
+                  "data_run": {"release": 7, "repo_commit": "93fe068", "generated_utc": "2026-11-09 15:20 UTC"}},
+         "problems": [], "outcomes": {"start_windows": 58652, "complete": 120000},
+         "h1": {"touch": touch, "buckets": buckets}, "run": {}}
+    lines = results_block(r).splitlines()
+    assert lines[0] == "AEM RESULTS v8 – paste everything between the rulers into the chat"
+    assert "data run v7 93fe068 2026-11-09 15:20 UTC" in lines[2] and "locked 2026-11-09T15:55:00Z" in lines[2]
+    assert "CHECKS    lock ok · data run ok · gates all passed in the data run" in lines
+    assert "OUTCOMES  start_windows 58,652 · complete 120,000" in lines
+    assert "H1 TOUCH  pooled · 3y: 3x 8.1% 10x 0.9% (50,000 windows, 3,500 firms)" in lines
+    assert "REGIME    before 2022 · 3y: 3x 9.0% 10x 1.0% (40,000 windows, 3,000 firms)" in lines
+    assert ("H1 5Y     pooled · 0.1x 20.0% · 0.4x 25.0% · 1x 30.0% · 2.5x 15.0% · 5x 7.0% · 10x 3.0% · mean 1.37 "
+            "(bounds 1.21 to 1.42) · 30,000 windows") in lines
+    assert "BY YEAR   3y touch 3x: 2014 7.0%" in lines
+    stopped = results_block({**r, "problems": ["the lock names no data run"], "h1": {}, "outcomes": {}}).splitlines()
+    assert "CHECKS    STOPPED – the lock names no data run" in stopped and not any(x.startswith("H1") for x in stopped)

@@ -861,12 +861,19 @@ The engine computes touch and end-of-window multiples with delisting returns and
 code("""
 # ── Phase E · Outcomes (locked) ──
 from aem_research import outcomes, universe
+from aem_research.report import failed_gates
 
 result = None
+gates_failed = failed_gates(REPORT) if cfg.locked else []
 if not cfg.locked:
     print(f"Locked phase – pre-registration status: {cfg.status}. Once the pre-lock checks pass, "
           "I lock it and commit LOCK.json.")
     LOG.skipped("E outcomes", "not locked")
+elif gates_failed:
+    # outcomes only from a run whose pre-lock gates all passed (the lock's data run passed them too)
+    print("Locked, but a pre-lock gate failed in this run – the outcomes stay closed:\\n  "
+          + "\\n  ".join(gates_failed))
+    LOG.skipped("E outcomes", "a pre-lock gate failed")
 elif not universe.READY or FEATURES is None:
     print("Pre-registration locked. Waiting for the Phase F features before computing outcomes.")
     LOG.skipped("E outcomes", "no features")
@@ -932,8 +939,8 @@ md("""
 1. **Paste the run summary** (the block above) into the chat.
 2. **SEC price panel (D10):** quarterly returns agree with the vendors' split-adjusted prices for at least 95% of company-quarters, split detection reaches 90% precision and recall, and the panel prices at least 80% of the listed holes. The vendor panel's EODHD verdict is kept for reference only.
 3. **Pre-lock checks:** every feature known for at least 80% of universe windows, fewer than 25% "unknown" delistings, and a look at the power table. If one fails, the definition is fixed in the config before the lock.
-4. **Lock:** I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp. D7–D10 (regime, its confirmation, unplanned findings, the SEC price basis) are already settled.
-5. **Next build:** the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark, the placebo.
+4. **Lock:** once every gate passes, I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp – naming this run as the data run. Notebook 04 then computes the outcomes and H1 from this run's saved tables in a few minutes; after the lock, this notebook's Phase E computes them too, but only in a run whose gates all pass.
+5. **Next build:** the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark, the placebo – tested on synthetic data before they touch real outcomes.
 """)
 
 

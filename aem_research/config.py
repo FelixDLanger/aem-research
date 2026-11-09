@@ -105,13 +105,18 @@ def load_config(path: str | Path, lock_path: str | Path | None = None) -> StudyC
 
 
 def lock_config(path: str | Path, lock_path: str | Path | None = None, *, note: str = "",
-                force: bool = False, now: datetime | None = None) -> dict:
+                force: bool = False, now: datetime | None = None, data_run: dict | None = None) -> dict:
     """Write or amend the lock. Returns the current lock record.
 
     Idempotent when the config is already locked. A config that changed after it was
     locked is only re-locked with force=True; the previous record is kept in history.
     Every lock, amendments included, needs study.status final and an empty
     review_before_lock list.
+
+    `data_run` names the notebook-01 run whose saved tables the results come from
+    (DATA_RUN_KEYS: its commit, release, notebook build and start time, as its paste block
+    shows them): fixed in the lock, before any outcome is computed, so the results cannot
+    come from another run.
     """
     cfg = load_config(path, lock_path)
     if cfg.status == "locked":
@@ -143,11 +148,30 @@ def lock_config(path: str | Path, lock_path: str | Path | None = None, *, note: 
         "hypotheses": [h.get("id") for h in cfg.hypotheses],
         "note": note,
     }
+    if data_run:
+        record["data_run"] = {k: data_run[k] for k in DATA_RUN_KEYS if k in data_run}
     if previous:
         record["amends"] = previous.get("config_sha256")
     out = {"schema": LOCK_SCHEMA, "current": record, "history": history}
     cfg.lock_path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return record
+
+
+DATA_RUN_KEYS = ("repo_commit", "release", "notebook_build", "generated_utc")
+
+
+def data_run_problems(cfg: StudyConfig, report: dict | None) -> list[str]:
+    """Why a saved notebook-01 run (its coverage_report.json) is not the data run the lock
+    names; empty when it is."""
+    if not cfg.locked:
+        return [f"the pre-registration is not locked (status {cfg.status})"]
+    want = (cfg.lock_record or {}).get("data_run")
+    if not want:
+        return ["the lock names no data run"]
+    if not report:
+        return ["notebook 01's run report is not on Drive"]
+    return [f"{k}: the run on Drive has {report.get(k)!r}, the lock names {want[k]!r}"
+            for k in DATA_RUN_KEYS if k in want and str(report.get(k)) != str(want[k])]
 
 
 def require_locked(cfg: StudyConfig) -> None:

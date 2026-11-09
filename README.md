@@ -2,11 +2,12 @@
 
 Base rates for extreme multiples in US small caps, and whether the AEM screening signals carry information. Empirical code for the AEM paper (Paper B) and, from the same data layer, the take-private sample for Paper A on regime-conditional value creation in buyouts.
 
-[Open notebook 01 · v7 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
-[Open notebook 02 · v7 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
-[Open notebook 03 · v7 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
+[Open notebook 01 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
+[Open notebook 02 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
+[Open notebook 03 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
+[Open notebook 04 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/04_results.ipynb) – the results, after the lock: outcomes and H1 from the notebook-01 run the lock names (a few minutes)
 
-The version (v7) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
+The version (v8) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
 
 ## Design at a glance (pre-registration v0.3, draft)
 
