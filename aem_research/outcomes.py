@@ -280,11 +280,14 @@ def quarter_end_panel(panel: pd.DataFrame, *, price_col: str = "price", toleranc
 
 def touch_sampling_ratios(spec: OutcomeSpec, panel: pd.DataFrame, starts: pd.DataFrame, *, sample_start,
                           horizons=(3,), multiples=None, quarterly_max_gap_days: int = 200) -> pd.DataFrame:
-    """How much quarter-end sampling lowers touch rates, measured before the sample (D10).
+    """How much quarter-end sampling lowers touch rates (D10): the same series sampled at
+    quarter-ends and daily, on the same windows.
 
-    Every start date must precede `sample_start`, so no window of the locked sample is
-    computed. Returns per horizon and multiple only the ratio of the quarter-end touch
-    rate to the daily touch rate on the same windows, and the window count."""
+    Every start date must precede `sample_start` – before the lock, the sample's first
+    start date, so no window of the locked sample is computed; after the lock (where the
+    notebook measures it, on B's vendor windows), any later date. Returns per horizon and
+    multiple only the ratio of the quarter-end touch rate to the daily touch rate, and the
+    window count."""
     st = starts.copy()
     st["start_date"] = _ns(st["start_date"])
     if len(st) and st["start_date"].max() >= pd.Timestamp(sample_start):

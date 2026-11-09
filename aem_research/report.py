@@ -58,6 +58,8 @@ def paste_block(report: dict) -> str:
             why = fred.get(f"{sid}_error") or (f"HTTP {fred[f'{sid}_http']}" if f"{sid}_http" in fred else "")
             parts.append(f"{sid} {val}" + (f" ({why})" if why and str(val).startswith("missing") else ""))
         lines.append("FRED      " + " · ".join(parts))
+    for line in r.get("split_cases") or []:
+        lines.append("SPLIT CASE " + str(line))
     for row in r.get("power") or []:
         lines.append("POWER     " + " · ".join(f"{k} {x}" for k, x in row.items()))
     for row in r.get("base_rates") or []:

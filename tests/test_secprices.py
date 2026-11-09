@@ -42,7 +42,7 @@ def _px(points):
 
 def _dei(cik, before, after, split_month="2014-02"):
     """Cover-page share counts a month after each quarter-end: `before` until the split month, then `after`."""
-    asof = pd.date_range("2012-10-31", "2015-01-31", freq="3ME")
+    asof = pd.date_range("2012-10-31", "2017-01-31", freq="3ME")
     sh = np.where(asof < pd.Timestamp(split_month), before, after)
     return pd.DataFrame({"cik": cik, "asof": asof, "filed": asof + pd.Timedelta(days=10), "shares": sh})
 
@@ -267,3 +267,45 @@ def test_one_holder_needs_the_filings_to_agree():
     assert info["splits_few_holders"] == 0 and info["unexplained_jumps"] == 1         # one holder alone: no
     _p, ev, info = _build({16: (*rev, ["LLL000016"])}, dei=_dei(16, 5e7, 5e6))
     assert info["splits_few_holders"] == 1 and ev.iloc[0]["ratio"] == 0.1             # with the filings: yes
+
+
+def test_holders_are_overruled_when_the_filings_show_no_split():
+    # all ten holders' counts double, the price halves – a split, unless the filings' count stayed put
+    c = _company(lambda k: "MMM000017", lambda k: (10 + k) if k < 4 else (10 + k) / 2,
+                 lambda k, j: (1000 + 10 * j) * (2 if k >= 4 else 1))
+    _p, ev, info = _build({17: (*c, ["MMM000017"])}, dei=_dei(17, 5e7, 5.2e7))
+    assert info["splits_holders"] == 0 and info["holder_splits_rejected"] == 1
+    _p, ev, info = _build({17: (*c, ["MMM000017"])}, dei=_dei(17, 5e7, 1.04e8))
+    assert info["splits_holders"] == 1 and ev.iloc[0]["ratio"] == 2.0                  # the filings agree
+
+
+def test_validation_uses_the_filings_as_a_third_opinion():
+    q = pd.date_range("2015-03-31", "2016-06-30", freq="QE")
+    days = pd.bdate_range("2015-03-02", "2016-07-15")
+    panel = pd.concat([
+        pd.DataFrame({"ticker": "CIK5", "cik": 5, "period": q, "date": q + pd.Timedelta(days=1),
+                      "price": [5, 5.5, 6, 6.5, 7, 7.5], "close_raw": [10, 11, 12, 6.5, 7, 7.5],
+                      "cusip": "C00000005", "n_filers": 12, "price_source": "13F", "source": "sec"}),
+        pd.DataFrame({"ticker": "CIK6", "cik": 6, "period": q, "date": q + pd.Timedelta(days=1),
+                      "price": [10, 10, 10, 6.6, 6.6, 6.6], "close_raw": [10, 10, 10, 6.6, 6.6, 6.6],
+                      "cusip": "C00000006", "n_filers": 12, "price_source": "13F", "source": "sec"})],
+        ignore_index=True)
+    ev = pd.DataFrame({"cik": [5], "period": [q[3]], "kind": "split", "ratio": [2.0], "evidence": ["holders"]})
+    # company 6: a spin-off worth a third of the price – the vendor adjusts for it (ratio 1.5), the share count stays
+    vend = {5: [5, 5.5, 6, 6.5, 7, 7.5], 6: [6.6, 6.6, 6.6, 6.6, 6.6, 6.6]}
+    vendor = pd.concat([pd.DataFrame({"ticker": f"V{c}", "date": days, "price": np.interp(days.asi8, q.asi8, p)})
+                        for c, p in vend.items()], ignore_index=True)
+    keys = pd.concat([pd.DataFrame({"ticker": f"V{c}", "start_date": q + pd.Timedelta(days=1), "cik": c})
+                      for c in vend], ignore_index=True)
+    filings = pd.concat([_dei(5, 5e7, 1e8, split_month="2015-11"), _dei(6, 5e7, 5e7, split_month="2015-11")],
+                        ignore_index=True)
+    plain = sp.validate(panel, ev, vendor, keys)
+    assert plain["vendor_splits"] == 2 and plain["split_recall"] == 0.5               # the spin-off counts as a split
+    out, cases = sp.validate(panel, ev, vendor, keys, filings=filings, return_cases=True)
+    assert out["vendor_splits"] == 1 and out["split_recall"] == 1.0 and out["vendor_moves_shares_flat"] == 1
+    assert out["split_precision"] == 1.0 and out["filings_known"] == 1.0
+    assert cases.empty or "split missed" not in set(cases["category"])
+    lines = sp.case_lines(pd.DataFrame([{**dict.fromkeys(sp.CASE_COLS, np.nan), "category": "split missed", "cik": 6,
+                                         "ticker": "CIK6", "prev_period": q[2], "period": q[3], "evidence": "",
+                                         "cusip_change": False}]))
+    assert len(lines) == 1 and lines[0].startswith("split missed · cik 6 · 2015-09 to 2015-12")

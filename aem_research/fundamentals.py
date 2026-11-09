@@ -214,18 +214,23 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
         fill = np.isnan(wad_last) & np.isfinite(now)
         wad_last[fill] = now[fill]
     out["shares_wad_last"] = wad_last
+    out["shares_bs"] = look.get("shares_bs", cik, P, 0)          # outstanding at the balance-sheet date
 
     out = out.merge(_dei_shares(prep, cutoff), on="cik", how="left")
     # Shares for the market cap: the anchor filing's cover page where the data sets carry it,
-    # else its weighted-average shares, else an older cover page filed within current_months.
+    # else its balance-sheet count, else its weighted-average shares, else an older cover page
+    # filed within current_months.
     dei_filed = pd.to_datetime(out["shares_dei_filed"])
     dei_ok = out["shares_dei"] > 0
     same = (dei_ok & (dei_filed >= pd.to_datetime(out["filed"]))).to_numpy()
+    bs_ok = (out["shares_bs"] > 0).to_numpy()
     wad_ok = (out["shares_wad_last"] > 0).to_numpy()
     fresh = (dei_ok & (dei_filed >= cutoff - pd.DateOffset(months=current_months))).to_numpy()
-    use_dei = same | (~wad_ok & fresh)
-    out["shares_filing"] = np.where(use_dei, out["shares_dei"], np.where(wad_ok, out["shares_wad_last"], np.nan))
-    out["shares_filing_kind"] = np.where(use_dei, "cover page", np.where(wad_ok, "weighted average", ""))
+    use_dei = same | (~bs_ok & ~wad_ok & fresh)
+    out["shares_filing"] = np.where(use_dei, out["shares_dei"],
+                                    np.where(bs_ok, out["shares_bs"], np.where(wad_ok, out["shares_wad_last"], np.nan)))
+    out["shares_filing_kind"] = np.where(use_dei, "cover page", np.where(bs_ok, "balance sheet",
+                                                                         np.where(wad_ok, "weighted average", "")))
     pf = vals[vals["group"] == "public_float"].sort_values("filed").drop_duplicates("cik", keep="last")
     out = out.merge(pf[["cik", "value"]].rename(columns={"value": "public_float"}), on="cik", how="left")
 
@@ -260,10 +265,11 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
     return out
 
 
-SHARE_TAGS = tuple(CLASS_SUMMED) + TAG_GROUPS["shares_wad"]
+SHARE_TAGS = tuple(CLASS_SUMMED) + TAG_GROUPS["shares_bs"] + TAG_GROUPS["shares_wad"]
 _WAD_ORDER = {"WeightedAverageNumberOfSharesOutstandingBasic": 0,
               "WeightedAverageNumberOfShareOutstandingBasicAndDiluted": 1,
               "WeightedAverageNumberOfDilutedSharesOutstanding": 2}
+_BS_ORDER = {t: i for i, t in enumerate(TAG_GROUPS["shares_bs"])}
 
 
 def filing_shares_at(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15) -> pd.DataFrame:
@@ -287,12 +293,12 @@ def filing_shares_at(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, curren
 
 def filing_share_history(facts: pd.DataFrame, *, max_lag_days: int = 150) -> pd.DataFrame:
     """(cik, filed, shares, kind): one share count per filing, as the filing reported it – its
-    cover-page count where the data sets carry it, else the weighted-average shares of its
-    own latest period (a quarter before a year; basic before diluted). Share counts in a
-    filing reflect every split before its filing date (weighted averages are restated for
-    them), so a split between two filings changes the count by its ratio – the SEC price
-    panel reads splits from this. Values for a period more than `max_lag_days` before the
-    filing date (late amendments of old periods) are left out."""
+    cover-page count where the data sets carry it, else its balance-sheet count at its own
+    period end, else the weighted-average shares of its own latest period (a quarter before
+    a year; basic before diluted). Share counts in a filing reflect every split before its
+    filing date (filers restate them), so a split between two filings changes the count by
+    its ratio – the SEC price panel reads splits from this. Values for a period more than
+    `max_lag_days` before the filing date (late amendments of old periods) are left out."""
     cols = ["cik", "filed", "shares", "kind"]
     if facts is None or not len(facts) or "tag" not in facts.columns:
         return pd.DataFrame(columns=cols)
@@ -313,7 +319,17 @@ def filing_share_history(facts: pd.DataFrame, *, max_lag_days: int = 150) -> pd.
                                                                         filed=("filed", "max"), ym=("ym", "max"))
         dims = dims[~dims.set_index(["cik", "adsh"]).index.isin(plain.set_index(["cik", "adsh"]).index)]
         parts.append(pd.concat([plain, dims], ignore_index=True).assign(kind="cover page"))
-    w = f[~is_dei & ~f["dim"].to_numpy()]
+    is_bs = f["tag"].isin(list(TAG_GROUPS["shares_bs"])).to_numpy()
+    b = f[is_bs & ~f["dim"].to_numpy() & (f["qtrs"].to_numpy() == 0)]
+    if len(b):
+        b = b.assign(tp=b["tag"].map(_BS_ORDER).fillna(9).astype(int))
+        b = (b.sort_values(["cik", "adsh", "ym", "tp"], ascending=[True, True, False, True], kind="mergesort")
+             .drop_duplicates(["cik", "adsh"]))
+        b = b.rename(columns={"value": "shares"})[["cik", "adsh", "shares", "filed", "ym"]]
+        if parts:
+            b = b[~b.set_index(["cik", "adsh"]).index.isin(parts[0].set_index(["cik", "adsh"]).index)]
+        parts.append(b.assign(kind="balance sheet"))
+    w = f[~is_dei & ~is_bs & ~f["dim"].to_numpy()]
     if len(w):
         w = w.assign(qp=np.select([w["qtrs"].to_numpy() == 1, w["qtrs"].to_numpy() == 4], [0, 1], 2),
                      tp=w["tag"].map(_WAD_ORDER).fillna(9).astype(int))
@@ -321,7 +337,8 @@ def filing_share_history(facts: pd.DataFrame, *, max_lag_days: int = 150) -> pd.
                            kind="mergesort").drop_duplicates(["cik", "adsh"]))
         w = w.rename(columns={"value": "shares"})[["cik", "adsh", "shares", "filed", "ym"]]
         if parts:
-            w = w[~w.set_index(["cik", "adsh"]).index.isin(parts[0].set_index(["cik", "adsh"]).index)]
+            done = pd.concat([x[["cik", "adsh"]] for x in parts], ignore_index=True)
+            w = w[~w.set_index(["cik", "adsh"]).index.isin(done.set_index(["cik", "adsh"]).index)]
         parts.append(w.assign(kind="weighted average"))
     if not parts:
         return pd.DataFrame(columns=cols)

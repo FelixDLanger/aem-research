@@ -76,3 +76,15 @@ def test_what_if_counts_other_choices():
     assert w["as_run"] == 2 and w["recomputed"] == 2
     assert w["shares_or_wad"] == 3                    # the stale cover page falls back to weighted-average shares
     assert w["holders_3"] == 2 and w["holders_75"] == 1 and w["no_listing"] == 3 and w["no_liquidity"] == 3
+
+
+def test_vendor_coverage_by_start_date():
+    a = _a()
+    a.loc[5, "in_universe"] = True                                   # the D1 row joins the universe
+    v = pd.DataFrame({"cik": pd.array([1, 6], dtype="Int64"), "start_date": [D0, D0], "ticker": ["AA", "FF"]})
+    cov = dg.vendor_coverage(a, v)
+    assert list(cov.index) == [D0, D1] and cov.loc[D0] == 0.5 and cov.loc[D1] == 0.0
+    c = dg.compare_universes(a, v.assign(in_universe=True, entry_price_unadjusted=10.0, shares=5e7,
+                                          shares_source="filing", market_cap=5e8, breadth=80,
+                                          dollar_volume_20d=1e6), CFG)
+    assert c["a_not_priced_by_year"] == "2015:67%"

@@ -49,6 +49,7 @@ FILING_TOL = 0.08             # the filings' share-count ratio within 8% of a st
 FILING_MIN = 1.9              # ... of at least 2-for-1 either way (issuance blurs smaller ones)
 DEI_AGREE = 0.35              # at a CUSIP change, the filings' ratio within 35% of the price ratio
 JUMP = 2.5                    # a quarter-to-quarter price move this large asks for evidence
+FILINGS_FLAT = 1.15           # filings whose share count moved less than 15% show no split
 
 PANEL_COLS = ["ticker", "cik", "date", "period", "price", "close_raw", "cusip", "price_source", "source", "n_filers"]
 
@@ -423,7 +424,12 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                     s = sp.holder_split(hrow)
                     if s is not None:
                         p13 = float(q.at[prev13, "price"])
-                        if p13 > 0 and _sane(px1 / p13, s, SANE_MOVE):
+                        # the filings must not say otherwise: a count unchanged or moved the other way
+                        # means the holders' ratio came from something else (a share-class flip, say)
+                        s_f = _dei_ratio(dei_idx, cik, q.at[prev13, "period"], p1)
+                        refuted = np.isfinite(s_f) and (abs(np.log(s_f)) < np.log(FILINGS_FLAT)
+                                                        or np.sign(np.log(s_f)) != np.sign(np.log(s)))
+                        if p13 > 0 and _sane(px1 / p13, s, SANE_MOVE) and not refuted:
                             ratio_at[i] = s
                             events.append((cik, p1, "split", s, "holders", int(hrow["matched"]), float(hrow["agree"])))
                             between = np.arange(prev13 + 1, i)             # fails prices of unknown side of the split
@@ -431,7 +437,7 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                             info["fails_dropped_at_split"] += int(len(between))
                             done = True
                         else:
-                            info["holder_splits_rejected"] += 1            # the price did not move with it
+                            info["holder_splits_rejected"] += 1            # the price or the filings did not move
                 if not done and c0 != c1:
                     done = True
                     hrow = hr_idx.get((cik, p1)) if both13 else None
@@ -617,14 +623,28 @@ def listed_flags(keys: pd.DataFrame, vendor_keys: pd.DataFrame | None, form25x: 
     return flag
 
 
+CASE_COLS = ["category", "cik", "ticker", "prev_period", "period", "evidence", "found", "vendor_ratio",
+             "filings_ratio", "raw_prev", "raw", "sec_return", "vendor_return", "cusip_change", "n_filers"]
+
+
 def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFrame,
-             vendor_keys: pd.DataFrame, *, tol: float = 0.10) -> dict:
+             vendor_keys: pd.DataFrame, *, tol: float = 0.10, filings: pd.DataFrame | None = None,
+             return_cases: bool = False):
     """Blind-safe check of the SEC panel against the vendors' split-adjusted prices (no
     outcomes): share of company-quarters whose quarterly return agrees within 10%, and the
-    splits the vendors' adjustments imply versus those found (precision and recall)."""
+    splits the vendors' adjustments imply versus those found (precision and recall).
+
+    `filings` (fundamentals.filing_share_history) is a third opinion: a split moves the
+    filings' share count by its ratio; a spin-off or special dividend, which the vendors
+    also adjust their prices for, leaves it alone. A vendor move with an unchanged count is
+    therefore no split; a split found that the filings confirm counts as right even where
+    the vendor shows nothing (unless the filings were its evidence). With `return_cases`,
+    also returns one row per questionable quarter (CASE_COLS): splits found but not
+    confirmed, vendor splits missed, and 2x gaps with no split on either side."""
     out = {"quarters_compared": 0}
+    empty = pd.DataFrame(columns=CASE_COLS)
     if panel is None or panel.empty or vendor_panel is None or vendor_panel.empty or vendor_keys is None:
-        return out
+        return (out, empty) if return_cases else out
     keep = ["ticker", "cik", "period", "price", "close_raw"] + [c for c in ("cusip", "n_filers") if c in panel.columns]
     sec = panel[panel["price_source"] == "13F"][keep].copy()
     sec = sec.sort_values(["ticker", "period"])
@@ -654,7 +674,7 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
         x["ticker"] = t
         vq.append(x.dropna(subset=["price"]))
     if not vq:
-        return out
+        return (out, empty) if return_cases else out
     vq = pd.concat(vq, ignore_index=True)[["ticker", "period", "price"]].rename(columns={"price": "v"})
     a = sec.merge(vk[["cik", "period", "ticker"]].rename(columns={"ticker": "vt"}), on=["cik", "period"], how="inner")
     a = a.merge(vq.rename(columns={"ticker": "vt"}), on=["vt", "period"], how="inner")
@@ -662,7 +682,7 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
                 on=["vt", "prev_period"], how="inner")
     a = a[(a["v"] > 0) & (a["v_prev"] > 0)]
     if a.empty:
-        return out
+        return (out, empty) if return_cases else out
     a = a.sort_values(["ticker", "period"], kind="mergesort").reset_index(drop=True)
     r_v = (a["v"] / a["v_prev"]).to_numpy()
     gap = np.log(a["r_sec"].to_numpy() / r_v)                 # SEC over vendor, log: 0 when they agree
@@ -677,10 +697,24 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
     trip_end = np.zeros(len(a), dtype=bool)                   # the quarter that undoes it
     trip_end[1:] = trip_start[:-1] & linked[:-1]
     round_trip = trip_start | trip_end
-    # the vendor's splits: its implied ratio within 5% of a common ratio (the dense standard set
+    # the vendor's moves: its implied ratio within 5% of a common ratio (the dense standard set
     # would call almost any large disagreement a split), and no one-quarter round trip
     cstd, cdist = sp.snap_common(implied)
-    vend_split = (np.abs(np.log(cstd)) >= np.log(sp.MIN_MOVE)) & (cdist <= np.log(1.05)) & ~round_trip
+    vend_move = (np.abs(np.log(cstd)) >= np.log(sp.MIN_MOVE)) & (cdist <= np.log(1.05)) & ~round_trip
+    # the filings across the same two quarter-ends: a split moves their count, a distribution does not
+    s_f = np.full(len(a), np.nan)
+    if filings is not None and len(filings):
+        idx = _dei_index(filings, set(a["cik"].astype("int64")))
+        s_f = np.array([_dei_ratio(idx, c, p0, p1) for c, p0, p1 in
+                        zip(a["cik"].to_numpy(), a["prev_period"].to_numpy(), a["period"].to_numpy())], dtype="float64")
+    f_known = np.isfinite(s_f)
+    lf = np.log(np.where(f_known, s_f, 1.0))
+    f_flat = f_known & (np.abs(lf) < np.log(FILINGS_FLAT))
+
+    def filings_agree(ls):                    # moved, the same way, within 1.5x of the ratio
+        return f_known & ~f_flat & (np.sign(lf) == np.sign(ls)) & (np.abs(lf - ls) <= np.log(1.5))
+
+    vend_split = vend_move & (~f_known | filings_agree(np.log(cstd)))
     ev = pd.DataFrame(columns=["cik", "period", "ratio", "evidence"])
     if events is not None and len(events):
         ev = events[events["kind"] == "split"].reindex(columns=["cik", "period", "ratio", "evidence"])
@@ -688,30 +722,72 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
     fm = a[["cik", "period"]].merge(ev.drop_duplicates(["cik", "period"]), on=["cik", "period"], how="left")
     found = fm["ratio"].to_numpy(dtype="float64")
     has = np.isfinite(found)
-    fit = has & (np.abs(np.log(np.where(has, found, 1.0) / implied)) <= np.log(1 + tol))   # vendor moved by it
+    lfound = np.log(np.where(has, found, 1.0))
+    fit = has & (np.abs(lfound - np.log(implied)) <= np.log(1 + tol))                    # vendor moved by it
     flat = has & (np.abs(np.log(implied)) < np.log(1 + tol))                              # vendor: no split
+    uses_filings = fm["evidence"].astype(str).str.contains("filings").to_numpy()
+    by_filings = has & ~uses_filings & filings_agree(lfound)                              # the filings moved by it
+    confirmed = fit | by_filings
     match = vend_split & fit
     out.update({"quarters_compared": int(len(a)), "returns_agree": round(float(agree.mean()), 4),
                 "vendor_splits": int(vend_split.sum()), "found_splits": int(has.sum()),
                 "split_recall": round(float(match.sum() / vend_split.sum()), 4) if vend_split.sum() else None,
-                "split_precision": round(float(fit.sum() / has.sum()), 4) if has.sum() else None,
+                "split_precision": round(float(confirmed.sum() / has.sum()), 4) if has.sum() else None,
+                "split_precision_vendor": round(float(fit.sum() / has.sum()), 4) if has.sum() else None,
                 "found_vendor_flat": int(flat.sum()),
+                "vendor_moves_shares_flat": int((vend_move & f_flat).sum()),
+                "filings_known": round(float(f_known.mean()), 4),
                 "jumps_up_2x": int((gap >= np.log(2)).sum()), "jumps_down_2x": int((gap <= -np.log(2)).sum()),
                 "jumps_round_trip": int(trip_start.sum())})
     if has.any():
-        by = pd.DataFrame({"evidence": fm["evidence"].astype(str).to_numpy()[has], "fit": fit[has]})
-        out["found_by"] = " ".join(f"{e} {len(g)} ({g['fit'].mean():.0%})" for e, g in by.groupby("evidence"))
+        by = pd.DataFrame({"evidence": fm["evidence"].astype(str).to_numpy()[has], "ok": confirmed[has]})
+        out["found_by"] = " ".join(f"{e} {len(g)} ({g['ok'].mean():.0%})" for e, g in by.groupby("evidence"))
     miss = vend_split & ~fit
+    cus_change = (a["cusip"].to_numpy() != a["cusip_prev"].to_numpy()) if "cusip_prev" in a.columns \
+        else np.zeros(len(a), dtype=bool)
     if miss.any():
-        cus_change = (a["cusip"].to_numpy() != a["cusip_prev"].to_numpy()) if "cusip_prev" in a.columns else None
         out["missed_splits"] = int(miss.sum())
-        if cus_change is not None:
-            out["missed_at_cusip_change"] = round(float(cus_change[miss].mean()), 4)
+        out["missed_at_cusip_change"] = round(float(cus_change[miss].mean()), 4)
         if "n_filers" in a.columns:
             out["missed_filers_median"] = float(np.nanmedian(pd.to_numeric(a["n_filers"], errors="coerce")
                                                              .to_numpy(dtype="float64")[miss]))
         out["missed_reverse_share"] = round(float((cstd[miss] < 1).mean()), 4)
-    return out
+    # the 2x gaps nothing explains: no split found, none the vendor implies, no round trip
+    lone = (np.abs(gap) >= np.log(2)) & ~round_trip & ~has & ~vend_split
+    out["gaps_2x_unexplained"] = int(lone.sum())
+    if not return_cases:
+        return out
+    cat = np.full(len(a), "", dtype=object)
+    cat[lone] = "2x gap, no split"
+    cat[miss] = "split missed"
+    cat[has & ~confirmed] = "split unconfirmed"
+    keep_rows = cat != ""
+    raw = a["close_raw"].to_numpy(dtype="float64")
+    cases = pd.DataFrame({
+        "category": cat, "cik": a["cik"].to_numpy(), "ticker": a["ticker"].to_numpy(),
+        "prev_period": a["prev_period"].to_numpy(), "period": a["period"].to_numpy(),
+        "evidence": fm["evidence"].fillna("").astype(str).to_numpy(), "found": found,
+        "vendor_ratio": implied, "filings_ratio": s_f, "raw_prev": raw / a["r_raw"].to_numpy(), "raw": raw,
+        "sec_return": a["r_sec"].to_numpy(), "vendor_return": r_v, "cusip_change": cus_change,
+        "n_filers": pd.to_numeric(a["n_filers"], errors="coerce").to_numpy() if "n_filers" in a.columns else np.nan,
+    })[keep_rows].reset_index(drop=True)
+    return out, cases[CASE_COLS]
+
+
+def case_lines(cases: pd.DataFrame, per_category: int = 4, seed: int = 0) -> list[str]:
+    """A few cases of each category for the paste block (prices at two quarter-ends, ratios)."""
+    if cases is None or cases.empty:
+        return []
+    lines = []
+    for cat_, g in cases.groupby("category", sort=True):
+        for r in g.sample(min(per_category, len(g)), random_state=seed).itertuples(index=False):
+            f = lambda x, d=3: "n/a" if x is None or not np.isfinite(float(x)) else f"{float(x):.{d}g}"  # noqa: E731
+            lines.append(f"{cat_} · cik {int(r.cik)} · {pd.Timestamp(r.prev_period):%Y-%m} to "
+                         f"{pd.Timestamp(r.period):%Y-%m} · found {f(r.found)} ({r.evidence or 'none'}) · "
+                         f"vendor ratio {f(r.vendor_ratio)} · filings ratio {f(r.filings_ratio)} · "
+                         f"raw {f(r.raw_prev)} to {f(r.raw)} · returns SEC {f(r.sec_return)} vendor "
+                         f"{f(r.vendor_return)} · CUSIP change {bool(r.cusip_change)} · 13F filers {f(r.n_filers)}")
+    return lines
 
 
 def holes_priced(holes_keys: pd.DataFrame, sec_pf: pd.DataFrame, sec_keys: pd.DataFrame) -> float | None:

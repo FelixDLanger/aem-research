@@ -450,6 +450,7 @@ from aem_research import fundamentals as fu, secprices
 from aem_research.data import ftd
 
 SEC_PANEL, SEC_EVENTS, SEC_BRIDGE, SEC_AS_OF, FTD_PX, SEC_INFO = None, None, None, None, None, {}
+SEC_FILINGS = None
 """, body="""
 if f13_breadth is None or not len(f13_breadth) or "price_13f" not in f13_breadth.columns:
     print("No 13F prices on Drive – the SEC panel (option A) is skipped; the vendor panel stands in.")
@@ -472,12 +473,12 @@ elif SEC_BRIDGE is not None:
     FTD_PX = ftd.load_px(paths.sec_dir, cusips=SEC_BRIDGE.loc[SEC_BRIDGE["cik"].isin(set(mains["cik"])), "cusip"].unique())
     # each filing's share count (cover page, else weighted average): split evidence where holders
     # are too few or a CUSIP changed
-    sec_dei = fu.filing_share_history(facts) if facts is not None and len(facts) else None
+    SEC_FILINGS = fu.filing_share_history(facts) if facts is not None and len(facts) else None
     SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
                                                             ftd_names=FTD_NAMES,
                                                             max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200),
-                                                            dei=sec_dei)
-    del holders, mains, sec_dei
+                                                            dei=SEC_FILINGS)
+    del holders, mains
     SEC_AS_OF = secprices.as_of_date(as_of_q)
     save_table(SEC_PANEL, paths.cache / "sec_panel")
     save_table(SEC_EVENTS, paths.cache / "sec_splits")
@@ -508,6 +509,7 @@ from aem_research.outcomes import build_price_panel, panel_as_of
 
 FEATURES, DELIST, panel, PRELOCK, POWER, COVREP, holes, basis = None, None, None, None, None, None, None, None
 FEATURES_V, DELIST_V, FEATURES_B, DELIST_B, LIQ, SEC_CHECK, pf_sec, keys_sec = (None,) * 8
+SPLIT_CASES, B_START = None, None
 as_of = None
 ST = cfg.get("starts")
 FORMATION = ft.formation_dates(ST["years"], ST.get("months", [1]))
@@ -612,18 +614,40 @@ else:
                                          max_gap_days=sec_gap)
         DELIST = dl.classify(seg_a, form25, merger, None,
                              exchange_map=secprices.exchange_map_for(SEC_PANEL, f25x, sym_ex))
-        # ---- B (robustness): the vendor universe plus the companies the vendors never price ----
+        # ---- B (robustness): the vendor universe plus the companies the vendors never price, from the
+        # first start date on which the vendor panel prices most of universe A (counts only) ----
         vend_ciks = set(keys["cik"].dropna().astype("int64"))
-        fill = FEATURES[FEATURES["in_universe"] & ~FEATURES["cik"].astype("Int64").isin(vend_ciks).fillna(False)]
-        FEATURES_B = pd.concat([FEATURES_V[FEATURES_V["in_universe"]].assign(panel_b="vendor"),
-                                fill.assign(panel_b="SEC fill")], ignore_index=True)
+        cover = dg.vendor_coverage(FEATURES, FEATURES_V)
+        b_min = float(cfg.get("price_basis.robustness_b_min_coverage", 0.8))
+        ok_dates = cover.index[cover >= b_min]
+        B_START = ok_dates[0] if len(ok_dates) else None
+        if B_START is None:
+            LOG.warn("F features", f"the vendor panel never prices {b_min:.0%} of universe A on a start date – B is empty")
+            FEATURES_B = FEATURES_V.iloc[0:0].assign(panel_b="vendor")
+            fill = FEATURES.iloc[0:0]
+        else:
+            fill = FEATURES[FEATURES["in_universe"] & (FEATURES["start_date"] >= B_START)
+                            & ~FEATURES["cik"].astype("Int64").isin(vend_ciks).fillna(False)]
+            FEATURES_B = pd.concat([FEATURES_V[FEATURES_V["in_universe"] & (FEATURES_V["start_date"] >= B_START)]
+                                    .assign(panel_b="vendor"), fill.assign(panel_b="SEC fill")], ignore_index=True)
         DELIST_B = pd.concat([DELIST_V.assign(panel_b="vendor"),
                               DELIST[DELIST["ticker"].isin(set(fill["ticker"]))].assign(panel_b="SEC fill")],
                              ignore_index=True)
-        REPORT["universe_b"] = {"windows": int(len(FEATURES_B)), "vendor_windows": int((FEATURES_B["panel_b"] == "vendor").sum()),
+        REPORT["universe_b"] = {"start": str(B_START.date()) if B_START is not None else "none",
+                                "vendor_coverage_first_date": round(float(cover.iloc[0]), 4) if len(cover) else None,
+                                "windows": int(len(FEATURES_B)),
+                                "vendor_windows": int((FEATURES_B["panel_b"] == "vendor").sum()),
                                 "sec_fill_windows": int(len(fill)), "sec_fill_firms": int(fill["cik"].nunique())}
+        print(f"B starts {REPORT['universe_b']['start']}: the first start date on which the vendor panel prices at least "
+              f"{b_min:.0%} of universe A's windows (it prices {REPORT['universe_b']['vendor_coverage_first_date']:.0%} "
+              f"at A's first date)")
         # ---- checks on the SEC panel, before the lock and without outcomes ----
-        SEC_CHECK = secprices.validate(SEC_PANEL, SEC_EVENTS, panel, keys)
+        SEC_CHECK, SPLIT_CASES = secprices.validate(SEC_PANEL, SEC_EVENTS, panel, keys, filings=SEC_FILINGS,
+                                                    return_cases=True)
+        REPORT["split_cases"] = secprices.case_lines(SPLIT_CASES, per_category=4)
+        if len(SPLIT_CASES):
+            print("Split check – cases to look at (counts and prices only):")
+            show(SPLIT_CASES["category"].value_counts().rename("cases"))
         hk = hole_keys[hole_keys["start_date"] >= first_a] if len(hole_keys) else hole_keys
         if len(hk):
             hk = hk.assign(listed=secprices.listed_flags(hk, None, f25x, sym_ex).to_numpy())
@@ -697,56 +721,19 @@ save_report()
 """)
 
 md("""
-## Phase F – Quarter-end vs daily touch rates (before the sample)
+## Phase F – Quarter-end vs daily touch rates (after the lock)
 
-The primary analysis counts a touch only at a quarter-end close (D10). This step measures how much that lowers touch rates, on the vendor panel's small caps for start dates in 2009–2012 – before the sample, so no window of the locked study is computed. Only the ratios are shown; they translate the study's quarter-end rates into daily ones for the terminal.
+The primary analysis counts a touch only at a quarter-end close (D10). How much that lowers touch rates is measured after the lock, on B's vendor windows: quarter-end against daily closes of the same series, so only the sampling differs. The pre-sample design (2009–2012 start dates) was dropped: the vendor panel prices almost none of those companies (the Nov 9 run found 51 windows).
 """)
 
 phase("F calibration", before="""
-# ── Phase F · Quarter-end over daily touch rates, 2009–2012 start dates (ratios only) ──
+# ── Phase F · Quarter-end over daily touch rates: measured after the lock ──
 from aem_research.outcomes import OutcomeSpec, touch_sampling_ratios
 
 CALIB = None
 """, body="""
-if panel is None or panel.empty:
-    print("No vendor panel – skipped.")
-else:
-    pre_dates = ft.formation_dates((2009, 2012), ST.get("months", [1]))
-    pfp = ft.price_features(panel, pre_dates, tolerance_days=ST.get("entry_tolerance_days", 7),
-                            max_gap_days=cfg.get("outcomes.max_gap_days", 120))
-    # size as in the study: the latest filing's share count (cover page, else weighted-average
-    # shares; filed within 15 months), else the vendor's
-    keys_p = ft.ticker_ciks(pfp, simfin.companies if simfin.found else None,
-                            globals().get("bridges") or [])
-    pfp = pfp.merge(keys_p[["ticker", "start_date", "cik"]], on=["ticker", "start_date"], how="left")
-    sh_p = (fu.filing_shares_at(facts, subs, pre_dates, current_months=cfg.get("universe.current_filer_months", 15))
-            if facts is not None and len(facts) and subs is not None else pd.DataFrame())
-    if len(sh_p):
-        pfp = pfp.merge(sh_p[["cik", "start_date", "shares_filing"]].assign(cik=sh_p["cik"].astype("Int64")),
-                        on=["cik", "start_date"], how="left")
-    else:
-        pfp["shares_filing"] = np.nan
-    fresh = (pd.to_numeric(pfp["shares_filing"], errors="coerce") > 0).to_numpy()
-    shares = (pd.to_numeric(pfp["shares_filing"], errors="coerce").where(fresh)
-              .fillna(pd.to_numeric(pfp["shares_vendor"], errors="coerce")))
-    mcap = pfp["entry_close_raw"] * shares
-    capr = cfg.get("universe.market_cap_usd")
-    keep = ((pfp["entry_close_raw"] >= cfg.get("universe.min_price_usd", 1.0)) & mcap.between(capr["min"], capr["max"])
-            & (pfp["dollar_volume_20d"] >= cfg.get("universe.min_median_dollar_volume_20d_usd", 1e5))).to_numpy()
-    sel = pfp[keep]
-    print(f"Calibration windows: {len(sel):,} on {sel['start_date'].nunique()} start dates "
-          f"({pre_dates[0].date()} to {pre_dates[-1].date()}); share counts from filings for "
-          f"{float(fresh[keep].mean()) if keep.any() else 0:.0%}, the vendor's for the rest")
-    spec = OutcomeSpec.from_config(cfg.data)
-    CALIB = touch_sampling_ratios(spec, panel, sel[["ticker", "start_date"]], sample_start=FORM_ALL[0],
-                                  horizons=(3, 5), quarterly_max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
-    show(CALIB)
-    c3 = CALIB[CALIB["horizon_years"] == 3] if len(CALIB) else CALIB
-    REPORT["calibration"] = {"start_dates": f"{pre_dates[0].date()} to {pre_dates[-1].date()}",
-                             "windows_selected": int(len(sel)),
-                             "shares_from_filings": round(float(fresh[keep].mean()), 4) if keep.any() else 0.0,
-                             "windows_3y": int(c3["windows"].max()) if len(c3) else 0,
-                             **{f"3y_{m:g}x": v for m, v in zip(c3["multiple"], c3["quarter_end_over_daily"])}}
+REPORT["calibration"] = {"basis": "after the lock – B's vendor windows, quarter-end against daily closes of the same series"}
+print(REPORT["calibration"]["basis"])
 """, after="""
 save_report()
 """)
@@ -781,7 +768,7 @@ phase("Excel export", before="""
 from aem_research.export import write_workbook
 
 FEATURE_COLS = ["ticker", "cik", "start_date", "entry_date", "entry_price_unadjusted", "price_basis", "market_cap",
-                "shares_source", "dollar_volume_20d", "drawdown", "fallen", "fcf_pos", "net_cash_pos", "s1_proxy",
+                "shares_source", "shares_kind", "dollar_volume_20d", "drawdown", "fallen", "fcf_pos", "net_cash_pos", "s1_proxy",
                 "low_dilution", "insider_any", "insider_cluster", "insider_opportunistic", "insider_routine_only",
                 "insider_unclassified_only", "insider_post_results_cluster", "sale_any", "breadth", "low_breadth",
                 "low_turnover", "low_attention", "h2a", "h2b", "h2_placebo", "sic", "source", "liquid", "listed"]
@@ -804,7 +791,8 @@ sec_sheet = {**{f"panel: {k}": v for k, v in (REPORT.get("sec_prices") or {}).it
              **{f"splits: {k}": v for k, v in (REPORT.get("splits") or {}).items()},
              **{f"universe B: {k}": v for k, v in (REPORT.get("universe_b") or {}).items()}} or None
 sheets = {"Summary": summary, "Coverage by date": COVREP, "Pre-lock checks": prelock_sheet, "Power": POWER,
-          "Regime": REGIME, "SEC price panel": sec_sheet, "Splits": SEC_EVENTS, "Calibration": CALIB,
+          "Regime": REGIME, "SEC price panel": sec_sheet, "Splits": SEC_EVENTS, "Split check": SPLIT_CASES,
+          "Calibration": CALIB,
           "Universe holes": holes, "Price basis": basis, "Delistings": DELIST,
           "SEC data sets": pd.DataFrame(sec_set_stats).T.reset_index() if sec_set_stats else None,
           "Universe windows": uni_rows, "Universe B windows": uni_b}
@@ -862,6 +850,17 @@ else:
             REPORT["base_rates_b"] = br_b.round(4).to_dict("records")
             save_table(result_b, paths.output / "outcomes_b")
             sheets_e.update({"Base rates B": br_b, "Outcomes B": result_b[[c for c in keep if c in result_b.columns]]})
+            # quarter-end against daily touch rates on B's vendor windows – only the sampling differs
+            CALIB = touch_sampling_ratios(OutcomeSpec.from_config(cfg.data), panel,
+                                          sb.loc[~sb["ticker"].isin(fill_t), ["ticker", "start_date"]],
+                                          sample_start=pd.Timestamp.max, horizons=(3, 5),
+                                          quarterly_max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
+            show(CALIB)
+            c3 = CALIB[CALIB["horizon_years"] == 3] if len(CALIB) else CALIB
+            REPORT["calibration"] = {"basis": "B's vendor windows (after the lock)",
+                                     "windows_3y": int(c3["windows"].max()) if len(c3) else 0,
+                                     **{f"3y_{m:g}x": v for m, v in zip(c3["multiple"], c3["quarter_end_over_daily"])}}
+            sheets_e["Calibration"] = CALIB
         write_workbook(paths.output / "aem_outcomes.xlsx", sheets_e)
 """)
 

@@ -7,8 +7,11 @@ every later filing, so the prior-year values needed for growth rates come from t
 same filing that reports the current ones.
 
 The extract keeps 10-K and 10-Q filings and only the tags listed in TAG_GROUPS,
-non-dimensional and consolidated, in USD or shares. Share counts reported per class
-(a dimension) are kept separately so classes can be summed.
+non-dimensional and consolidated, in USD or shares. Cover-page share counts reported per
+class (a dimension) are kept separately so classes can be summed. The data sets cover
+the primary financial statements only (SEC, Financial Statement Data Sets, section 3),
+so cover-page (dei) facts are rarely there; share counts come from the balance sheet
+and the income statement instead (fundamentals.snapshot).
 
 The groups after "public_float" serve Paper A (operating income, depreciation and
 amortization, pre-tax income, interest: the EBITDA behind a take-private's entry and
@@ -57,6 +60,10 @@ TAG_GROUPS: dict[str, tuple[str, ...]] = {
                    "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
                    "WeightedAverageNumberOfSharesOutstandingBasic"),
     "shares_dei": ("EntityCommonStockSharesOutstanding",),
+    # shares outstanding at the balance-sheet date (the balance sheet's parenthetical, else the
+    # equity statement): the market cap's share count where the cover page is missing – these
+    # data sets hold the primary statements only, so the cover page rarely is there
+    "shares_bs": ("CommonStockSharesOutstanding", "SharesOutstanding"),
     "public_float": ("EntityPublicFloat",),
     # Paper A: EBITDA = operating income + depreciation and amortization; interest for coverage
     "operating_income": ("OperatingIncomeLoss",),

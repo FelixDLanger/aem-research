@@ -248,7 +248,6 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
     f["market_cap"] = f["entry_price_unadjusted"] * f["shares"]
     f["turnover_126d"] = f["volume_126d"] / f["shares"]
 
-    sic = pd.to_numeric(f["sic"], errors="coerce")
     f["is_filer"] = f["fund_available"].notna()
     if liquidity == "breadth":
         liquid = pd.to_numeric(f["breadth"], errors="coerce") >= float(min_breadth if min_breadth is not None else 3)
@@ -264,6 +263,7 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
         f["listed"] = False
     else:
         f["listed"] = True
+    sic = pd.to_numeric(f["sic"], errors="coerce")       # after the merges: aligned with f's rows
     f["in_universe"] = (f["is_filer"] & (sic != 6770)
                         & (f["entry_price_unadjusted"] >= float(u.get("min_price_usd", 1.0)))
                         & f["market_cap"].between(float(cap.get("min", 1e8)), float(cap.get("max", 2e9)))

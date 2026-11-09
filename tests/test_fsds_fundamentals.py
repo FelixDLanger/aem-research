@@ -229,3 +229,19 @@ def test_share_history_one_count_per_filing_as_filed(extracted):
     assert a["shares"].tolist() == [10.0e6, 10.1e6, 10.3e6]
     assert a["kind"].tolist() == ["weighted average", "cover page", "cover page"]
     assert h.loc[h["cik"] == 1002, "shares"].tolist() == [10e6]                                  # classes summed
+
+
+def test_balance_sheet_count_comes_before_the_weighted_average():
+    s1, n1 = acme_rows()
+    n1 = n1 + [num_row(Q312, "CommonStockSharesOutstanding", "20120930", 0, 10.2e6, "shares"),
+               num_row(Q312, "CommonStockSharesOutstanding", "20110930", 0, 9.0e6, "shares"),   # a comparative
+               num_row(Q312, "SharesOutstanding", "20120930", 0, 10.25e6, "shares")]            # lower priority
+    with zipfile.ZipFile(io.BytesIO(fsds_zip(s1, n1))) as zf:
+        ex = fsds.extract_quarter(zf)
+    no_cover = ex["facts"][ex["facts"]["tag"].astype(str) != "EntityCommonStockSharesOutstanding"]
+    snap = fu.snapshots(no_cover, ex["subs"], ["2013-01-02"]).set_index("cik")
+    assert snap.loc[1001, "shares_filing"] == pytest.approx(10.2e6)
+    assert snap.loc[1001, "shares_filing_kind"] == "balance sheet"
+    h = fu.filing_share_history(no_cover)
+    assert h["kind"].tolist() == ["weighted average", "weighted average", "balance sheet"]
+    assert h["shares"].tolist()[-1] == pytest.approx(10.2e6)                                  # own period end

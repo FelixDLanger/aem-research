@@ -121,8 +121,9 @@ decisions:
       exactly like the survivors, and the published numbers rest on public data only. A
       touch is a quarter-end close at or above the multiple (or the last price before a
       series stops); brief spikes between quarter-ends do not count, so touch rates come
-      out lower than on daily closes, and the ratio between the two is measured on
-      2009-2012 start dates, outside the sample. Robustness B keeps the daily vendor closes
+      out lower than on daily closes, and the ratio between the two is measured after
+      the lock on B's vendor windows (amended Nov 9 from 2009-2012 start dates, which the
+      vendor panel barely covers). Robustness B keeps the daily vendor closes
       and fills only the companies the vendors never priced. Decided before any outcome
       was computed.
 
@@ -291,13 +292,16 @@ universe:
     Unadjusted entry price times the share count of the latest 10-K or 10-Q filed before
     the formation date (within current_filer_months): its cover-page count
     (dei:EntityCommonStockSharesOutstanding, summed across classes) where the SEC data
-    sets carry it, else its weighted-average diluted shares (latest quarter, else
-    year-to-date, else the year); for vendor rows (B), the vendor's count where no filing
-    value exists. Amended before the lock (Nov 9, 2026): the Financial Statement Data
+    sets carry it, else its balance-sheet count at its period end
+    (CommonStockSharesOutstanding, else SharesOutstanding), else its weighted-average
+    diluted shares (latest quarter, else year-to-date, else the year); for vendor rows
+    (B), the vendor's count where no filing value exists. Amended before the lock (Nov 9, 2026): the Financial Statement Data
     Sets hold the primary statements only, so a cover-page count was known for 1.4% of
     the windows that pass the other filters (filed within 15 months for 0.2%) – the first
     runs had used SimFin's count for 91% of vendor windows, and universe A, which has no
-    vendor fallback, kept 147 windows.
+    vendor fallback, kept 147 windows. With the weighted-average shares a filing count
+    existed for 80% of A's eligible windows (17% of the vendor universe's windows had
+    none), so the balance-sheet count was added the same day.
   unadjusted_price: >-
     Vendor price histories are rescaled for every later split, so size and price filters
     on them would use the future (a later 1:10 reverse split shows ten times the actual
@@ -346,8 +350,9 @@ price_basis:
     matched; a split is recorded when at least three are matched, their median share
     ratio is within 3% of a standard ratio (those companies use: 6:5 to 100:1 forward,
     1:2 to 1:1000 reverse), at least half of them are within 5% of it, the ratio is
-    at least 1.2 or at most 1/1.2, and the price moved with it (the split-adjusted
-    quarterly move within 1/6 to 6 times; a share-class flip moves no price).
+    at least 1.2 or at most 1/1.2, the price moved with it (the split-adjusted
+    quarterly move within 1/6 to 6 times; a share-class flip moves no price), and the
+    filings' share count (below) did not stay put (within 15%) or move the other way.
     Fails-to-deliver prices between two 13F quarters that straddle a split are dropped.
     At a change of main CUSIP without holder evidence, the last daily price under the
     old CUSIP over the first under the new one (at most 30 days apart) gives the ratio
@@ -400,26 +405,33 @@ price_basis:
     B – daily closes from the vendor panel (price_panel) with the vendor universe, plus
     the companies the vendor panel never prices, from the SEC panel with A's filters,
     measured on quarter-end prices plus the highest fails-to-deliver price of each
-    half-month file (restated for splits; quarters with a split skipped). Start dates
-    from January 2013 for vendor windows, from July 2013 for filled ones.
+    half-month file (restated for splits; quarters with a split skipped). B starts on the
+    first start date on which the vendor panel prices at least
+    robustness_b_min_coverage of universe A's windows (counts only; amended Nov 9, 2026:
+    the vendor panel prices 1% of A's windows at A's first start date, so earlier B
+    windows would be a handful of vendor names plus the never-priced fill).
+  robustness_b_min_coverage: 0.8
   validation: >-
     Before the lock and without outcomes: quarterly returns of the SEC panel against the
     vendors' split-adjusted prices for the same company and quarter (agreement within
     10%), and splits found against the splits the vendors' adjustments imply: the vendor
     return over the 13F price ratio within 5% of a common ratio, one-quarter round trips
-    (a gap the next quarter undoes) excluded as price errors. Recall: the vendor's splits
+    (a gap the next quarter undoes) excluded as price errors, and – where the filings'
+    share counts are known – the count must have moved with it (moved at least 15%, the
+    same way, within 1.5 times of the ratio): vendors adjust their prices for spin-offs
+    and special dividends too, which leave the share count alone. Recall: those splits
     found with the vendor's ratio (within 10%); precision: splits found that the vendor's
-    prices moved by. Also counted: quarters where the SEC return is at least twice or at
-    most half the vendor's, and splits found where the vendor shows none. Thresholds in
-    review_before_lock.
+    prices or (unless they were the evidence) the filings' counts moved by. Also counted:
+    quarters where the SEC return is at least twice or at most half the vendor's, the
+    2x gaps nothing explains, and sample cases of each kind (SPLIT CASE lines; the
+    Split check sheet lists all). Thresholds in review_before_lock.
   calibration: >-
-    The ratio of quarter-end to daily touch rates on the vendor panel, for windows that
-    start on the quarterly dates of 2009-2012 (before the sample, so no sample window is
-    computed): vendor tickers priced at US$1 or more with market cap US$100m-2bn (vendor
-    close times the latest filing's share count as in universe.market_cap, else the
-    vendor's share count) and median 20-day dollar volume of at least US$100k. Only the
-    ratios are shown. They translate the study's quarter-end touch rates into daily ones for
-    the terminal.
+    The ratio of quarter-end to daily touch rates, measured after the lock on B's vendor
+    windows: the same series sampled at quarter-ends and daily, so only the sampling
+    differs. It translates the study's quarter-end touch rates into daily ones for the
+    terminal. (Amended Nov 9, 2026: the earlier design measured it on 2009-2012 start
+    dates, before the sample, but the vendor panel prices almost none of those companies
+    – 51 windows in the Nov 9 run.)
 
 outcomes:
   horizons_years: [3, 5, 10]

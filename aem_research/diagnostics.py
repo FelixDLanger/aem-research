@@ -199,6 +199,20 @@ def _keyed(f: pd.DataFrame, cols) -> pd.DataFrame:
     return x
 
 
+def vendor_coverage(a: pd.DataFrame, v: pd.DataFrame, *, start=None) -> pd.Series:
+    """Per start date (sorted): the share of A's universe windows whose company the vendor panel
+    prices on that date (a vendor row with the same CIK)."""
+    if a is None or v is None or not len(a) or "in_universe" not in a.columns:
+        return pd.Series(dtype="float64")
+    au = _keyed(_since(a[_flag(a["in_universe"])], start), ["cik", "start_date"])[["cik", "start_date"]]
+    au = au.drop_duplicates()
+    if au.empty:
+        return pd.Series(dtype="float64")
+    vk = _keyed(v, ["cik", "start_date"])[["cik", "start_date"]].drop_duplicates()
+    hit = pd.MultiIndex.from_frame(au).isin(pd.MultiIndex.from_frame(vk))
+    return pd.Series(hit, index=au["start_date"].to_numpy()).groupby(level=0).mean().sort_index()
+
+
 def _vendor_misses(ak: pd.DataFrame, v: pd.DataFrame, start) -> dict:
     """A's universe windows whose company the vendor panel does not price on that date – the
     companies a survivorship-free source adds: overall, at the first and last start dates,
@@ -211,10 +225,12 @@ def _vendor_misses(ak: pd.DataFrame, v: pd.DataFrame, start) -> dict:
     vk = _keyed(v, ["cik", "start_date"])[["cik", "start_date"]].drop_duplicates()
     miss = ~pd.MultiIndex.from_frame(au).isin(pd.MultiIndex.from_frame(vk))
     by = pd.Series(miss, index=au["start_date"].to_numpy()).groupby(level=0).mean()
+    years = pd.Series(miss, index=pd.DatetimeIndex(au["start_date"]).year).groupby(level=0).mean()
     return {"a_universe_windows": int(len(au)), "a_not_priced_by_vendor": _share(miss),
             "a_not_priced_first_date": round(float(by.iloc[0]), 4),
             "a_not_priced_median_date": round(float(by.median()), 4),
-            "a_not_priced_last_date": round(float(by.iloc[-1]), 4)}
+            "a_not_priced_last_date": round(float(by.iloc[-1]), 4),
+            "a_not_priced_by_year": " ".join(f"{y}:{x:.0%}" for y, x in years.items())}
 
 
 def compare_universes(a: pd.DataFrame, v: pd.DataFrame, cfg_data: dict, *, start=None, min_breadth=None) -> dict:
@@ -341,4 +357,4 @@ def dtypes_line(f: pd.DataFrame, cols=("cik", "start_date", "breadth", "listed",
 
 
 __all__ = ["ORDER", "FILTERS", "filter_flags", "universe_funnel", "binding_filter", "funnel_summary", "detail",
-           "dei_fresh", "compare_universes", "what_if", "examples", "dtypes_line"]
+           "dei_fresh", "vendor_coverage", "compare_universes", "what_if", "examples", "dtypes_line"]
