@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .data.fsds import CLASS_SUMMED, PERIODIC_FORMS, TAGS
+from .data.fsds import CLASS_SUMMED, PERIODIC_FORMS, TAG_GROUPS, TAGS
 
 FP_QUARTERS = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}
 FLOW_GROUPS = ("ocf", "capex", "revenue")
@@ -205,8 +205,27 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
         fill = np.isnan(wad_now) & np.isfinite(now) & np.isfinite(prev)
         wad_now[fill], wad_prev[fill] = now[fill], prev[fill]
     out["wad_now"], out["wad_prev"] = wad_now, wad_prev
+    # The anchor filing's weighted-average shares alone (no year-ago value needed): the share
+    # count for the market cap where the cover page is missing – the SEC data sets hold the
+    # primary statements, so the cover page's count is rarely there.
+    wad_last = np.full(len(a), np.nan)
+    for q in (np.ones(len(a)), k, np.full(len(a), 4.0)):
+        now = look.get("shares_wad", cik, P, q)
+        fill = np.isnan(wad_last) & np.isfinite(now)
+        wad_last[fill] = now[fill]
+    out["shares_wad_last"] = wad_last
 
     out = out.merge(_dei_shares(prep, cutoff), on="cik", how="left")
+    # Shares for the market cap: the anchor filing's cover page where the data sets carry it,
+    # else its weighted-average shares, else an older cover page filed within current_months.
+    dei_filed = pd.to_datetime(out["shares_dei_filed"])
+    dei_ok = out["shares_dei"] > 0
+    same = (dei_ok & (dei_filed >= pd.to_datetime(out["filed"]))).to_numpy()
+    wad_ok = (out["shares_wad_last"] > 0).to_numpy()
+    fresh = (dei_ok & (dei_filed >= cutoff - pd.DateOffset(months=current_months))).to_numpy()
+    use_dei = same | (~wad_ok & fresh)
+    out["shares_filing"] = np.where(use_dei, out["shares_dei"], np.where(wad_ok, out["shares_wad_last"], np.nan))
+    out["shares_filing_kind"] = np.where(use_dei, "cover page", np.where(wad_ok, "weighted average", ""))
     pf = vals[vals["group"] == "public_float"].sort_values("filed").drop_duplicates("cik", keep="last")
     out = out.merge(pf[["cik", "value"]].rename(columns={"value": "public_float"}), on="cik", how="left")
 
@@ -241,54 +260,78 @@ def snapshot(prep: dict, subs: pd.DataFrame, cutoff, *, current_months: int = 15
     return out
 
 
-def dei_shares_at(facts: pd.DataFrame, cutoffs) -> pd.DataFrame:
-    """(cik, start_date, shares_dei, shares_dei_filed): the latest cover-page share count filed
-    before each cutoff (classes summed), from the share-count facts alone – a light version
-    of the snapshot's shares for dates the snapshots do not cover (the pre-sample calibration)."""
-    cols = ["cik", "start_date", "shares_dei", "shares_dei_filed"]
-    if facts is None or not len(facts) or "tag" not in facts.columns:
+SHARE_TAGS = tuple(CLASS_SUMMED) + TAG_GROUPS["shares_wad"]
+_WAD_ORDER = {"WeightedAverageNumberOfSharesOutstandingBasic": 0,
+              "WeightedAverageNumberOfShareOutstandingBasicAndDiluted": 1,
+              "WeightedAverageNumberOfDilutedSharesOutstanding": 2}
+
+
+def filing_shares_at(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15) -> pd.DataFrame:
+    """(cik, start_date, shares_filing, shares_filing_kind, fund_available): the market-cap share
+    count a snapshot would use, for dates the snapshots do not cover (the pre-sample
+    calibration) – computed from the share-count facts alone, so it is quick."""
+    cols = ["cik", "start_date", "shares_filing", "shares_filing_kind", "fund_available"]
+    if facts is None or not len(facts) or "tag" not in facts.columns or subs is None or not len(subs):
         return pd.DataFrame(columns=cols)
-    f = facts[facts["tag"].isin(list(CLASS_SUMMED))]
+    f = facts[facts["tag"].isin(list(SHARE_TAGS))]
     if f.empty:
         return pd.DataFrame(columns=cols)
-    prep = prepare(f)
-    parts = []
-    for c in cutoffs:
-        s = _dei_shares(prep, pd.Timestamp(c))
-        if len(s):
-            parts.append(s.assign(start_date=pd.Timestamp(c)))
-    if not parts:
+    snap = snapshots(f, subs, cutoffs, current_months=current_months)
+    if snap.empty:
         return pd.DataFrame(columns=cols)
-    out = pd.concat(parts, ignore_index=True)
+    snap = snap[snap["shares_filing"] > 0]
+    out = snap[cols].reset_index(drop=True)
     out["start_date"] = pd.to_datetime(out["start_date"]).astype("datetime64[ns]")
-    return out[cols]
+    return out
 
 
-def dei_share_history(facts: pd.DataFrame) -> pd.DataFrame:
-    """(cik, asof, filed, shares): every cover-page share count on file, dated by the month
-    it was counted in (month-end; FSDS rounds dates to month-ends), the class counts summed
-    where a filing reports classes only, the latest filing kept per company and month.
-    The SEC price panel reads splits from it (a split changes the count by its ratio)."""
-    cols = ["cik", "asof", "filed", "shares"]
+def filing_share_history(facts: pd.DataFrame, *, max_lag_days: int = 150) -> pd.DataFrame:
+    """(cik, filed, shares, kind): one share count per filing, as the filing reported it – its
+    cover-page count where the data sets carry it, else the weighted-average shares of its
+    own latest period (a quarter before a year; basic before diluted). Share counts in a
+    filing reflect every split before its filing date (weighted averages are restated for
+    them), so a split between two filings changes the count by its ratio – the SEC price
+    panel reads splits from this. Values for a period more than `max_lag_days` before the
+    filing date (late amendments of old periods) are left out."""
+    cols = ["cik", "filed", "shares", "kind"]
     if facts is None or not len(facts) or "tag" not in facts.columns:
         return pd.DataFrame(columns=cols)
-    f = facts[facts["tag"].isin(list(CLASS_SUMMED))][["cik", "ym", "value", "dim", "filed", "adsh"]]
+    f = facts[facts["tag"].isin(list(SHARE_TAGS))][["cik", "tag", "ym", "qtrs", "value", "dim", "filed", "adsh"]]
     f = f[pd.to_numeric(f["value"], errors="coerce") > 0]
     if f.empty:
         return pd.DataFrame(columns=cols)
-    f = f.assign(dim=f["dim"].astype(bool), filed=pd.to_datetime(f["filed"]).astype("datetime64[ns]"))
-    plain = (f[~f["dim"]].groupby(["cik", "adsh", "ym"], as_index=False)
-             .agg(shares=("value", "max"), filed=("filed", "max")))
-    dims = (f[f["dim"]].groupby(["cik", "adsh", "ym"], as_index=False)
-            .agg(shares=("value", "sum"), filed=("filed", "max")))
-    dims = dims.merge(plain[["cik", "adsh", "ym"]].assign(_p=True), on=["cik", "adsh", "ym"], how="left")
-    both = pd.concat([plain, dims[dims["_p"].isna()].drop(columns="_p")], ignore_index=True)
-    both["asof"] = _ym_to_ts(both["ym"]).to_numpy()
-    both = (both.sort_values(["cik", "asof", "filed"], kind="mergesort")
-            .drop_duplicates(["cik", "asof"], keep="last"))
-    both["cik"] = both["cik"].astype("int64")
-    both["shares"] = both["shares"].astype("float64")
-    return both[cols].reset_index(drop=True)
+    f = f.assign(tag=f["tag"].astype(str), dim=f["dim"].astype(bool),
+                 filed=pd.to_datetime(f["filed"]).astype("datetime64[ns]"), ym=f["ym"].astype("int64"))
+    is_dei = f["tag"].isin(list(CLASS_SUMMED)).to_numpy()
+    parts = []
+    d = f[is_dei]
+    if len(d):
+        d = d[d["ym"] == d.groupby(["cik", "adsh"])["ym"].transform("max")]        # the filing's count date
+        plain = d[~d["dim"]].groupby(["cik", "adsh"], as_index=False).agg(shares=("value", "max"),
+                                                                          filed=("filed", "max"), ym=("ym", "max"))
+        dims = d[d["dim"]].groupby(["cik", "adsh"], as_index=False).agg(shares=("value", "sum"),
+                                                                        filed=("filed", "max"), ym=("ym", "max"))
+        dims = dims[~dims.set_index(["cik", "adsh"]).index.isin(plain.set_index(["cik", "adsh"]).index)]
+        parts.append(pd.concat([plain, dims], ignore_index=True).assign(kind="cover page"))
+    w = f[~is_dei & ~f["dim"].to_numpy()]
+    if len(w):
+        w = w.assign(qp=np.select([w["qtrs"].to_numpy() == 1, w["qtrs"].to_numpy() == 4], [0, 1], 2),
+                     tp=w["tag"].map(_WAD_ORDER).fillna(9).astype(int))
+        w = (w.sort_values(["cik", "adsh", "ym", "qp", "tp"], ascending=[True, True, False, True, True],
+                           kind="mergesort").drop_duplicates(["cik", "adsh"]))
+        w = w.rename(columns={"value": "shares"})[["cik", "adsh", "shares", "filed", "ym"]]
+        if parts:
+            w = w[~w.set_index(["cik", "adsh"]).index.isin(parts[0].set_index(["cik", "adsh"]).index)]
+        parts.append(w.assign(kind="weighted average"))
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    h = pd.concat(parts, ignore_index=True)
+    lag = (h["filed"] - _ym_to_ts(h["ym"]).to_numpy()).dt.days
+    h = h[(lag <= max_lag_days).to_numpy()]
+    h = h.sort_values(["cik", "filed"], kind="mergesort").drop_duplicates(["cik", "filed"], keep="last")
+    h["cik"] = h["cik"].astype("int64")
+    h["shares"] = h["shares"].astype("float64")
+    return h[cols].reset_index(drop=True)
 
 
 def snapshots(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15,

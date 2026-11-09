@@ -110,7 +110,9 @@ decisions:
     decision: >-
       The first run found about a fifth of the companies in range at the median start
       date (a third in 2013) missing from SimFin and Stooq – mostly companies that later
-      delisted – and EODHD's personal plans do not cover publishing results. So every
+      delisted – and EODHD's personal plans do not cover publishing results. (Corrected
+      Nov 9: that count rested on the filers whose public float the SEC data sets carry,
+      a small subset; universe A now measures it directly – the A VS V line.) So every
       price the primary analysis uses now comes from SEC filings (price_basis): quarter-end
       prices from Form 13F, the SEC fails-to-deliver files where 13F has none, and splits
       found from the holders' share counts and CUSIP changes. Entry, the size and price
@@ -286,9 +288,16 @@ universe:
   min_price_usd: 1.0
   market_cap_usd: {min: 100000000, max: 2000000000}     # AEM-2 v2.6
   market_cap: >-
-    Unadjusted entry price times shares outstanding from the latest cover page filed
-    before the formation date (dei:EntityCommonStockSharesOutstanding, summed across
-    classes); SimFin shares where no filing value exists.
+    Unadjusted entry price times the share count of the latest 10-K or 10-Q filed before
+    the formation date (within current_filer_months): its cover-page count
+    (dei:EntityCommonStockSharesOutstanding, summed across classes) where the SEC data
+    sets carry it, else its weighted-average diluted shares (latest quarter, else
+    year-to-date, else the year); for vendor rows (B), the vendor's count where no filing
+    value exists. Amended before the lock (Nov 9, 2026): the Financial Statement Data
+    Sets hold the primary statements only, so a cover-page count was known for 1.4% of
+    the windows that pass the other filters (filed within 15 months for 0.2%) – the first
+    runs had used SimFin's count for 91% of vendor windows, and universe A, which has no
+    vendor fallback, kept 147 windows.
   unadjusted_price: >-
     Vendor price histories are rescaled for every later split, so size and price filters
     on them would use the future (a later 1:10 reverse split shows ten times the actual
@@ -342,20 +351,25 @@ price_basis:
     Fails-to-deliver prices between two 13F quarters that straddle a split are dropped.
     At a change of main CUSIP without holder evidence, the last daily price under the
     old CUSIP over the first under the new one (at most 30 days apart) gives the ratio
-    (within 6% of a standard ratio); the cover-page share counts in the filings
-    (dei:EntityCommonStockSharesOutstanding, counted on or before the earlier
-    quarter-end and after the later one) must agree within 35%, and without filings the
-    ratio must be a common one (2:1 to 10:1 forward, 1:2 to 1:100 reverse; the full
-    standard set is so dense below 1:10 that any price ratio lands near one of its
-    members). Where neither prices nor holders decide, the filings alone record a split
-    when their share ratio is within 8% of a standard ratio of at least 2:1 either way
-    and the price moved the other way by about as much (split-adjusted move within
-    1/2.5 to 2.5 times). Any quarter-to-quarter move of 2.5 times or more is checked the
-    same way – one or two matched holders within 3% of a standard ratio, or the
-    filings – and counted when nothing explains it. A one-quarter price error (at
-    least 4 times away from both neighbouring quarter-ends, which agree within 50%) is
-    replaced by the fails-to-deliver close of that quarter-end when it fits the
-    neighbours, else left out.
+    (within 6% of a standard ratio); the filings' share counts must agree within 35% –
+    each filing's cover-page count where the SEC data sets carry it, else the
+    weighted-average shares of its own latest period, which filers restate for every
+    split before the filing date, so the last filing on or before the earlier
+    quarter-end and the first after the later one differ by the split ratio. Without
+    filings the ratio must be a common one (2:1 to 10:1 forward, 1:2 to 1:100 reverse;
+    the full standard set is so dense below 1:10 that any price ratio lands near one
+    of its members). Where neither prices nor holders decide at a CUSIP change, the
+    filings alone record a split when their share ratio is within 8% of a standard
+    ratio of at least 2:1 either way and the price moved the other way by about as much
+    (split-adjusted move within 1/2.5 to 2.5 times). Any quarter-to-quarter move of 2.5
+    times or more is checked against one or two matched holders within 3% of a standard
+    ratio (with the filings agreeing, or both of two holders) and against the filings
+    alone (reverse splits only: share issuance can double a count while the price
+    halves, but nothing ordinary halves it while the price doubles), and counted when
+    nothing explains it. A one-quarter price error (at least 4 times away from both
+    neighbouring quarter-ends, which agree within 50%) is replaced by the
+    fails-to-deliver close of that quarter-end when it fits the neighbours, else left
+    out.
   new_series: >-
     A change of main CUSIP that holders show to be the same security (median ratio within
     15% of 1) or prices show to be the same (within 25%) continues the series; one that is
@@ -402,9 +416,9 @@ price_basis:
     The ratio of quarter-end to daily touch rates on the vendor panel, for windows that
     start on the quarterly dates of 2009-2012 (before the sample, so no sample window is
     computed): vendor tickers priced at US$1 or more with market cap US$100m-2bn (vendor
-    close times the cover-page share count filed within 15 months, else the vendor's
-    share count) and median 20-day dollar volume of at least US$100k. Only the ratios
-    are shown. They translate the study's quarter-end touch rates into daily ones for
+    close times the latest filing's share count as in universe.market_cap, else the
+    vendor's share count) and median 20-day dollar volume of at least US$100k. Only the
+    ratios are shown. They translate the study's quarter-end touch rates into daily ones for
     the terminal.
 
 outcomes:

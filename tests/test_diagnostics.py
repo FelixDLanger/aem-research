@@ -66,6 +66,9 @@ def test_compare_finds_vendor_windows_in_a_and_names_the_first_failure():
     assert c["v_vendor_shares_where_a_has_none"] == 1.0 and c["a_dei_fresh"] == 0.75
     ex = dg.examples(a, v, CFG, n=5)
     assert set(ex["a_fails"]) == {"shares", "liquid"} and len(ex) == 2
+    assert c["a_universe_windows"] == 2 and c["a_not_priced_by_vendor"] == 0.0
+    c2 = dg.compare_universes(a, v[v["cik"] != 2], CFG)          # the vendor never priced company 2
+    assert c2["a_not_priced_by_vendor"] == 0.5 and c2["a_not_priced_first_date"] == 0.5
 
 
 def test_what_if_counts_other_choices():

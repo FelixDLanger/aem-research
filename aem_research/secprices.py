@@ -206,30 +206,31 @@ def _fill_choice(cp: pd.DataFrame, prefer: str | None, symbols: dict, main_symbo
     return None
 
 
-def _dei_index(dei: pd.DataFrame | None, ciks) -> dict:
-    """cik -> (as-of dates, share counts), sorted, for the cover-page share counts on file."""
-    if dei is None or not len(dei):
+def _dei_index(hist: pd.DataFrame | None, ciks) -> dict:
+    """cik -> (filing dates, share counts), sorted, from fundamentals.filing_share_history."""
+    if hist is None or not len(hist):
         return {}
-    d = dei[dei["cik"].isin(ciks)].sort_values(["cik", "asof"], kind="mergesort")
-    return {int(c): (g["asof"].to_numpy(dtype="datetime64[ns]"), g["shares"].to_numpy(dtype="float64"))
+    d = hist[hist["cik"].isin(ciks)].sort_values(["cik", "filed"], kind="mergesort")
+    return {int(c): (g["filed"].to_numpy(dtype="datetime64[ns]"), g["shares"].to_numpy(dtype="float64"))
             for c, g in d.groupby("cik", sort=False)}
 
 
 def _dei_ratio(idx: dict, cik, p0, p1, max_days: int = 200) -> float:
-    """Shares counted after p1 over shares counted on or before p0 (a split between the two
-    quarter-ends changes the count by its ratio), NaN without a count on each side within
-    `max_days`. Counts are dated by month, so 'after p1' means a later month."""
+    """Shares in the first filing filed after p1 over shares in the last filing filed on or
+    before p0. A filing's share counts reflect every split before its filing date, so a
+    split between the two quarter-ends changes the ratio by its ratio. NaN without a filing
+    on each side within `max_days`."""
     x = idx.get(int(cik))
     if x is None:
         return np.nan
-    asof, sh = x
+    filed, sh = x
     t0, t1 = np.datetime64(pd.Timestamp(p0), "ns"), np.datetime64(pd.Timestamp(p1), "ns")
-    j0 = int(np.searchsorted(asof, t0, side="right")) - 1
-    j1 = int(np.searchsorted(asof, t1, side="right"))
-    if j0 < 0 or j1 >= asof.size:
+    j0 = int(np.searchsorted(filed, t0, side="right")) - 1
+    j1 = int(np.searchsorted(filed, t1, side="right"))
+    if j0 < 0 or j1 >= filed.size:
         return np.nan
     lim = np.timedelta64(max_days, "D")
-    if asof[j0] < t0 - lim or asof[j1] > t1 + lim or sh[j0] <= 0 or sh[j1] <= 0:
+    if filed[j0] < t0 - lim or filed[j1] > t1 + lim or sh[j0] <= 0 or sh[j1] <= 0:
         return np.nan
     return float(sh[j1] / sh[j0])
 
@@ -250,14 +251,18 @@ def _few_holders(hrow) -> float | None:
     return r if abs(np.log(med / r)) <= np.log(1 + sp.MEDIAN_TOL) else None
 
 
-def _filing_split(s_f: float, r_raw: float) -> float | None:
+def _filing_split(s_f: float, r_raw: float, *, reverse_only: bool = False) -> float | None:
     """A split read from the filings' share counts: their ratio within FILING_TOL of a standard
     ratio of at least FILING_MIN either way, and the price moved the other way by about as
-    much (split-adjusted move within FILING_MOVE)."""
+    much (split-adjusted move within FILING_MOVE). `reverse_only` where nothing else points
+    to a split: share issuance can double a count while the price halves, but no ordinary
+    event halves it while the price doubles."""
     if not (np.isfinite(s_f) and s_f > 0):
         return None
     std, dist = sp.snap([s_f])
     s = float(std[0])
+    if reverse_only and s >= 1:
+        return None
     if dist[0] <= np.log(1 + FILING_TOL) and abs(np.log(s)) >= np.log(FILING_MIN) and _sane(r_raw, s, FILING_MOVE):
         return s
     return None
@@ -293,10 +298,11 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
     final fails-to-deliver price where a series stops early). events: splits and new series
     (cik, period, kind, ratio, evidence, matched, agree).
 
-    `dei` (cik, asof, filed, shares – fundamentals.dei_share_history) adds the filings'
-    cover-page share counts as split evidence: it confirms or refutes a split read from
-    prices at a CUSIP change, and finds splits the holders cannot show (too few of them)
-    where the price moved by the same ratio."""
+    `dei` (cik, filed, shares – fundamentals.filing_share_history: each filing's cover-page
+    count, else its weighted-average shares) adds the filings' share counts as split
+    evidence: they confirm or refute a split read from prices at a CUSIP change, and find
+    reverse splits the holders cannot show (too few of them) where the price moved by the
+    same ratio."""
     info = {"companies": 0, "series": 0, "quarters_13f": 0, "quarters_fails": 0, "final_prices": 0,
             "splits_holders": 0, "splits_cusip": 0, "splits_filings": 0, "splits_few_holders": 0,
             "holder_splits_rejected": 0, "new_series": 0, "fails_dropped_at_split": 0,
@@ -478,7 +484,7 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                         if ok:
                             s, evid = s_h, "holders (few)"
                     if s is None and np.isfinite(s_f):
-                        s = _filing_split(s_f, r_raw)
+                        s = _filing_split(s_f, r_raw, reverse_only=True)
                         evid = "filings" if s is not None else None
                     if s is not None:
                         ratio_at[i] = s

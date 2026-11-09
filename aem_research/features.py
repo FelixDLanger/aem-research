@@ -229,10 +229,22 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
     f["price_basis"] = np.where(ratio.notna(), "13F", "vendor close")
     f["vendor_close_vs_13f"] = pd.to_numeric(f["close_raw_q"], errors="coerce") / pd.to_numeric(f["price_13f"], errors="coerce")
 
-    dei_fresh = pd.to_datetime(f["shares_dei_filed"]) >= f["start_date"] - pd.DateOffset(months=15)
-    shares = pd.to_numeric(f["shares_dei"], errors="coerce").where(dei_fresh)
-    f["shares_source"] = np.where(shares.notna(), "filing", np.where(f["shares_vendor"].notna(), "vendor", ""))
-    f["shares"] = shares.fillna(pd.to_numeric(f["shares_vendor"], errors="coerce"))
+    # Shares for the market cap: the latest filing's count – its cover page where the SEC data
+    # sets carry it (rarely: they hold the primary statements), else its weighted-average shares
+    # (fundamentals.snapshot) – else, for vendor rows, the vendor's.
+    if "shares_filing" in f.columns:
+        shares = pd.to_numeric(f["shares_filing"], errors="coerce")
+        kind = (f["shares_filing_kind"] if "shares_filing_kind" in f.columns
+                else pd.Series("filing", index=f.index)).astype(object)
+    else:
+        dei_fresh = pd.to_datetime(f["shares_dei_filed"]) >= f["start_date"] - pd.DateOffset(months=15)
+        shares = pd.to_numeric(f["shares_dei"], errors="coerce").where(dei_fresh)
+        kind = pd.Series("cover page", index=f.index, dtype=object)
+    shares = shares.where(shares > 0)
+    vendor = pd.to_numeric(f["shares_vendor"], errors="coerce")
+    f["shares_source"] = np.where(shares.notna(), "filing", np.where(vendor.notna(), "vendor", ""))
+    f["shares_kind"] = np.where(shares.notna(), kind.fillna("").astype(str), np.where(vendor.notna(), "vendor", ""))
+    f["shares"] = shares.fillna(vendor)
     f["market_cap"] = f["entry_price_unadjusted"] * f["shares"]
     f["turnover_126d"] = f["volume_126d"] / f["shares"]
 

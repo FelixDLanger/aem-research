@@ -266,7 +266,7 @@ print(doc_st)
 md("""
 ## A5 – Entry: financials, enterprise value, multiples, regime
 
-The target's latest 10-K or 10-Q filed before the first merger filing gives trailing revenue, EBITDA (operating income plus depreciation and amortization), cash, debt and cover-page shares; the offer price turns them into enterprise value and entry multiples. The macro moderators of Paper B's D7 are measured on the same date.
+The target's latest 10-K or 10-Q filed before the first merger filing gives trailing revenue, EBITDA (operating income plus depreciation and amortization), cash, debt and the share count (the cover page where the SEC data sets carry it, else the weighted-average shares); the offer price turns them into enterprise value and entry multiples. The macro moderators of Paper B's D7 are measured on the same date.
 """)
 
 phase("A5 entry", body="""
@@ -361,8 +361,8 @@ phase("A9 save", before="""
 from aem_research.export import write_workbook
 
 DEAL_COLS = ["deal_id", "target_cik", "target_name", "sic", "announce_year", "first_filed", "last_filed", "forms",
-             "doc_form", "doc_url", "completed", "completion_date", "completion_evidence", "offer_price", "shares_dei",
-             "equity_value", "cash_total", "debt", "net_cash", "enterprise_value", "revenue", "operating_income", "dna",
+             "doc_form", "doc_url", "completed", "completion_date", "completion_evidence", "offer_price", "shares_filing",
+             "shares_filing_kind", "shares_dei", "equity_value", "cash_total", "debt", "net_cash", "enterprise_value", "revenue", "operating_income", "dna",
              "ebitda", "ebitda_source", "ev_ebitda", "ev_revenue", "equity_commitment_usd", "debt_commitment_usd",
              "leverage_x", "equity_share", "sponsor", "fin_filed", "period_end", "entry_real_yield_10y",
              "entry_tightening_2y_12m", "entry_credit_spread_baa", "entry_inflation_cpi_yoy", "exit_route",

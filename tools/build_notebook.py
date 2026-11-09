@@ -470,8 +470,9 @@ elif SEC_BRIDGE is not None:
     holders = thirteenf.load_holders(paths.sec_dir, cusips=mains["cusip"].unique())
     holders = holders.merge(mains[["cusip", "period"]].drop_duplicates(), on=["cusip", "period"], how="inner")
     FTD_PX = ftd.load_px(paths.sec_dir, cusips=SEC_BRIDGE.loc[SEC_BRIDGE["cik"].isin(set(mains["cik"])), "cusip"].unique())
-    # the filings' cover-page share counts: split evidence where holders are too few or a CUSIP changed
-    sec_dei = fu.dei_share_history(facts) if facts is not None and len(facts) else None
+    # each filing's share count (cover page, else weighted average): split evidence where holders
+    # are too few or a CUSIP changed
+    sec_dei = fu.filing_share_history(facts) if facts is not None and len(facts) else None
     SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
                                                             ftd_names=FTD_NAMES,
                                                             max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200),
@@ -713,17 +714,20 @@ else:
     pre_dates = ft.formation_dates((2009, 2012), ST.get("months", [1]))
     pfp = ft.price_features(panel, pre_dates, tolerance_days=ST.get("entry_tolerance_days", 7),
                             max_gap_days=cfg.get("outcomes.max_gap_days", 120))
-    # size as in the study: the cover-page share count filed within 15 months, else the vendor's
+    # size as in the study: the latest filing's share count (cover page, else weighted-average
+    # shares; filed within 15 months), else the vendor's
     keys_p = ft.ticker_ciks(pfp, simfin.companies if simfin.found else None,
                             globals().get("bridges") or [])
     pfp = pfp.merge(keys_p[["ticker", "start_date", "cik"]], on=["ticker", "start_date"], how="left")
-    dei_p = fu.dei_shares_at(facts, pre_dates) if facts is not None and len(facts) else pd.DataFrame()
-    if len(dei_p):
-        pfp = pfp.merge(dei_p.assign(cik=dei_p["cik"].astype("Int64")), on=["cik", "start_date"], how="left")
+    sh_p = (fu.filing_shares_at(facts, subs, pre_dates, current_months=cfg.get("universe.current_filer_months", 15))
+            if facts is not None and len(facts) and subs is not None else pd.DataFrame())
+    if len(sh_p):
+        pfp = pfp.merge(sh_p[["cik", "start_date", "shares_filing"]].assign(cik=sh_p["cik"].astype("Int64")),
+                        on=["cik", "start_date"], how="left")
     else:
-        pfp["shares_dei"], pfp["shares_dei_filed"] = np.nan, pd.NaT
-    fresh = (pd.to_datetime(pfp["shares_dei_filed"]) >= pfp["start_date"] - pd.DateOffset(months=15)).to_numpy()
-    shares = (pd.to_numeric(pfp["shares_dei"], errors="coerce").where(fresh)
+        pfp["shares_filing"] = np.nan
+    fresh = (pd.to_numeric(pfp["shares_filing"], errors="coerce") > 0).to_numpy()
+    shares = (pd.to_numeric(pfp["shares_filing"], errors="coerce").where(fresh)
               .fillna(pd.to_numeric(pfp["shares_vendor"], errors="coerce")))
     mcap = pfp["entry_close_raw"] * shares
     capr = cfg.get("universe.market_cap_usd")

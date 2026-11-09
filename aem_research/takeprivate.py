@@ -376,7 +376,7 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
     """XBRL financials filed before each deal's first filing (point in time)."""
     cols = ["deal_id", "fin_filed", "period_end", "fin_form", "revenue", "operating_income", "dna", "dna_tag",
             "amortization", "pretax_income", "interest_expense", "cash_total", "debt", "net_cash", "shares_dei",
-            "ebitda", "ebitda_source"]
+            "shares_filing", "shares_filing_kind", "ebitda", "ebitda_source"]
     if not len(deals) or facts is None or not len(facts):
         return pd.DataFrame(columns=cols)
     ciks = deals["target_cik"].dropna().astype("int64").unique()
@@ -403,7 +403,8 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
                      "fin_form": r["form"], **{k: r.get(k) for k in ("revenue", "operating_income", "dna", "dna_tag",
                                                                      "amortization", "pretax_income",
                                                                      "interest_expense", "cash_total", "debt",
-                                                                     "net_cash", "shares_dei")}})
+                                                                     "net_cash", "shares_dei", "shares_filing",
+                                                                     "shares_filing_kind")}})
     out = pd.DataFrame(rows, columns=cols[:-2])
     if not len(out):
         return pd.DataFrame(columns=cols)
@@ -419,11 +420,15 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
 def entry_values(deals: pd.DataFrame) -> pd.DataFrame:
     """Enterprise value at the offer price and the entry multiples (inputs, not outcomes)."""
     d = deals.copy()
-    for c in ("offer_price", "shares_dei", "net_cash", "ebitda", "revenue", "debt_commitment_usd",
+    for c in ("offer_price", "shares_dei", "shares_filing", "net_cash", "ebitda", "revenue", "debt_commitment_usd",
               "equity_commitment_usd"):
         if c not in d.columns:                     # an earlier phase failed: the values stay unknown
             d[c] = np.nan
-    d["equity_value"] = d["offer_price"] * d["shares_dei"]
+    # the latest filing's share count (cover page, else weighted-average shares: the SEC data
+    # sets rarely carry the cover page), the cover page alone where that is all there is
+    shares = pd.to_numeric(d["shares_filing"], errors="coerce")
+    shares = shares.where(shares > 0, pd.to_numeric(d["shares_dei"], errors="coerce"))
+    d["equity_value"] = d["offer_price"] * shares
     d["enterprise_value"] = d["equity_value"] - d["net_cash"]
     d["ev_ebitda"] = (d["enterprise_value"] / d["ebitda"]).where(d["ebitda"] > 0)
     d["ev_revenue"] = (d["enterprise_value"] / d["revenue"]).where(d["revenue"] > 0)

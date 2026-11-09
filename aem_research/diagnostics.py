@@ -158,6 +158,9 @@ def detail(f: pd.DataFrame, cfg_data: dict, *, start=None, min_breadth=None) -> 
             src = f["shares_source"].astype(str).to_numpy()[base]
             out["shares_from_filing_base"] = _share(src == "filing")
             out["shares_from_vendor_base"] = _share(src == "vendor")
+        if "shares_kind" in f.columns:
+            kinds = pd.Series(f["shares_kind"].astype(str).to_numpy()[base]).replace("", "none")
+            out["shares_kind_base"] = ", ".join(f"{k} {v:.1%}" for k, v in kinds.value_counts(normalize=True).items())
         if "wad_now" in f.columns:
             out["wad_known_base"] = _share(_num(f["wad_now"]).gt(0).to_numpy()[base])
         out["mcap_musd_base"] = _q(_num(_col(f, "market_cap"))[base] / 1e6)
@@ -196,6 +199,24 @@ def _keyed(f: pd.DataFrame, cols) -> pd.DataFrame:
     return x
 
 
+def _vendor_misses(ak: pd.DataFrame, v: pd.DataFrame, start) -> dict:
+    """A's universe windows whose company the vendor panel does not price on that date – the
+    companies a survivorship-free source adds: overall, at the first and last start dates,
+    and the median over start dates."""
+    if "in_universe" not in ak.columns:
+        return {}
+    au = _since(ak[_flag(ak["in_universe"])], start)[["cik", "start_date"]].drop_duplicates()
+    if au.empty:
+        return {"a_universe_windows": 0}
+    vk = _keyed(v, ["cik", "start_date"])[["cik", "start_date"]].drop_duplicates()
+    miss = ~pd.MultiIndex.from_frame(au).isin(pd.MultiIndex.from_frame(vk))
+    by = pd.Series(miss, index=au["start_date"].to_numpy()).groupby(level=0).mean()
+    return {"a_universe_windows": int(len(au)), "a_not_priced_by_vendor": _share(miss),
+            "a_not_priced_first_date": round(float(by.iloc[0]), 4),
+            "a_not_priced_median_date": round(float(by.median()), 4),
+            "a_not_priced_last_date": round(float(by.iloc[-1]), 4)}
+
+
 def compare_universes(a: pd.DataFrame, v: pd.DataFrame, cfg_data: dict, *, start=None, min_breadth=None) -> dict:
     """The vendor universe's windows, looked up in A by (cik, start date): found or not, the
     first A step each fails, and A over vendor ratios of price, shares, size and breadth
@@ -205,6 +226,7 @@ def compare_universes(a: pd.DataFrame, v: pd.DataFrame, cfg_data: dict, *, start
     if vu.empty:
         return {"vendor_windows": 0}
     ak = _keyed(a, _A_COLS)
+    out0 = _vendor_misses(ak, v, start)
     # a company with two SEC series on one date: the one in A's universe first
     ak = (ak.assign(_u=_flag(_col(ak, "in_universe", False)))
           .sort_values(["cik", "start_date", "_u"], ascending=[True, True, False], kind="mergesort")
@@ -212,7 +234,7 @@ def compare_universes(a: pd.DataFrame, v: pd.DataFrame, cfg_data: dict, *, start
     m = vu.merge(ak, on=["cik", "start_date"], how="left", suffixes=("_v", "_a"), indicator=True)
     found = (m["_merge"] == "both").to_numpy()
     out = {"vendor_windows": len(vu), "found_in_a": _share(found),
-           "cik_anywhere_in_a": _share(vu["cik"].isin(set(ak["cik"])).to_numpy())}
+           "cik_anywhere_in_a": _share(vu["cik"].isin(set(ak["cik"])).to_numpy()), **out0}
     if not found.any():
         return out
     mf = m[found].reset_index(drop=True)

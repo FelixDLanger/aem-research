@@ -195,12 +195,37 @@ def test_cover_page_shares_stand_in_when_weighted_average_shares_are_missing():
     assert snap["fcf_ps"] == pytest.approx(16e6 / 11e6)
 
 
-def test_cover_page_shares_at_any_date_without_snapshots(extracted):
+def test_filing_shares_at_any_date_cover_page_else_weighted_average(extracted):
     """The pre-sample calibration needs share counts on dates the snapshots do not cover."""
-    s = fu.dei_shares_at(extracted["facts"], ["2012-04-02", "2013-01-02"]).set_index(["cik", "start_date"])
-    assert s.loc[(1001, pd.Timestamp("2012-04-02")), "shares_dei"] == pytest.approx(10.1e6)
-    assert s.loc[(1001, pd.Timestamp("2013-01-02")), "shares_dei"] == pytest.approx(10.3e6)
-    assert s.loc[(1002, pd.Timestamp("2013-01-02")), "shares_dei"] == pytest.approx(10e6)      # classes summed
-    assert (1002, pd.Timestamp("2012-04-02")) not in s.index                                  # not filed yet
-    assert s.loc[(1001, pd.Timestamp("2013-01-02")), "shares_dei_filed"] == pd.Timestamp("2012-11-05")
-    assert fu.dei_shares_at(extracted["facts"].iloc[0:0], ["2013-01-02"]).empty
+    facts, subs = extracted["facts"], extracted["subs"]
+    s = fu.filing_shares_at(facts, subs, ["2012-04-02", "2013-01-02"]).set_index(["cik", "start_date"])
+    assert s.loc[(1001, pd.Timestamp("2012-04-02")), "shares_filing"] == pytest.approx(10.1e6)
+    assert s.loc[(1001, pd.Timestamp("2013-01-02")), "shares_filing"] == pytest.approx(10.3e6)
+    assert s.loc[(1002, pd.Timestamp("2013-01-02")), "shares_filing"] == pytest.approx(10e6)   # classes summed
+    assert (s["shares_filing_kind"] == "cover page").all()
+    assert (1002, pd.Timestamp("2012-04-02")) not in s.index                                    # not filed yet
+    # the SEC data sets rarely carry the cover page: the weighted-average shares stand in
+    no_cover = facts[facts["tag"].astype(str) != "EntityCommonStockSharesOutstanding"]
+    w = fu.filing_shares_at(no_cover, subs, ["2012-04-02", "2013-01-02"]).set_index(["cik", "start_date"])
+    assert w.loc[(1001, pd.Timestamp("2012-04-02")), "shares_filing"] == pytest.approx(10.0e6)   # the annual
+    assert w.loc[(1001, pd.Timestamp("2013-01-02")), "shares_filing"] == pytest.approx(10.1e6)   # the quarter
+    assert (w["shares_filing_kind"] == "weighted average").all() and 1002 not in w.index.get_level_values(0)
+    assert fu.filing_shares_at(facts.iloc[0:0], subs, ["2013-01-02"]).empty
+
+
+def test_snapshot_share_count_for_the_market_cap(extracted):
+    facts, subs = extracted["facts"], extracted["subs"]
+    no_cover = facts[facts["tag"].astype(str) != "EntityCommonStockSharesOutstanding"]
+    snap = fu.snapshots(no_cover, subs, ["2013-01-02"]).set_index("cik")
+    # no year-ago weighted average is needed for the market cap (the dilution pair is another matter)
+    assert snap.loc[1001, "shares_filing"] == pytest.approx(10.1e6)
+    assert snap.loc[1001, "shares_filing_kind"] == "weighted average"
+
+
+def test_share_history_one_count_per_filing_as_filed(extracted):
+    h = fu.filing_share_history(extracted["facts"])
+    a = h[h["cik"] == 1001].reset_index(drop=True)
+    assert a["filed"].dt.strftime("%Y-%m-%d").tolist() == ["2011-11-04", "2012-03-01", "2012-11-05"]
+    assert a["shares"].tolist() == [10.0e6, 10.1e6, 10.3e6]
+    assert a["kind"].tolist() == ["weighted average", "cover page", "cover page"]
+    assert h.loc[h["cik"] == 1002, "shares"].tolist() == [10e6]                                  # classes summed

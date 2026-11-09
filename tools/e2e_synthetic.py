@@ -36,7 +36,8 @@ import pandas as pd
 SCRATCH = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SCENARIO = sys.argv[3] if len(sys.argv) > 3 else "full"
-FULL = SCENARIO in ("full", "locked", "broken", "testsfail", "eodhd", "secfill")
+FULL = SCENARIO in ("full", "locked", "broken", "testsfail", "eodhd", "secfill", "nocover")
+COVER = SCENARIO != "nocover"          # nocover: like the real SEC data sets, no cover-page facts
 DRIVE = SCRATCH / "drive"
 shutil.rmtree(DRIVE, ignore_errors=True)
 rng = np.random.default_rng(42)
@@ -228,12 +229,14 @@ if FULL:
                                     1 if k < 4 else 4, round(float(wad[P_] * splits_so_far(t, filed)), 0), "shares"))
             nums += [num_row(adsh, "CashAndCashEquivalentsAtCarryingValue", f"{P:%Y%m%d}", 0,
                              round(float(rng.uniform(5e6, 6e7)), 0)),
-                     num_row(adsh, "LongTermDebt", f"{P:%Y%m%d}", 0, round(float(rng.uniform(0, 5e7)), 0)),
-                     num_row(adsh, "EntityCommonStockSharesOutstanding", f"{filed + pd.offsets.MonthEnd(0):%Y%m%d}",
+                     num_row(adsh, "LongTermDebt", f"{P:%Y%m%d}", 0, round(float(rng.uniform(0, 5e7)), 0))]
+            cover = [num_row(adsh, "EntityCommonStockSharesOutstanding", f"{filed + pd.offsets.MonthEnd(0):%Y%m%d}",
                              0, round(float(wad[P] * splits_so_far(t, filed)), 0), "shares", version="dei/2014")]
             if k == 4:
-                nums.append(num_row(adsh, "EntityPublicFloat", f"{P - pd.DateOffset(months=6) + pd.offsets.MonthEnd(0):%Y%m%d}",
-                                    0, round(float(wad[P] * 8), 0), version="dei/2014"))
+                cover.append(num_row(adsh, "EntityPublicFloat", f"{P - pd.DateOffset(months=6) + pd.offsets.MonthEnd(0):%Y%m%d}",
+                                     0, round(float(wad[P] * 8), 0), version="dei/2014"))
+            if COVER:                              # the same random draws either way
+                nums += cover
             lab = q_label(filed)
             fs_files.setdefault(lab, ([], []))
             fs_files[lab][0].extend(subs_)
@@ -451,6 +454,14 @@ if SCENARIO == "secfill":
     assert len(got) >= 10 and fill > 0, (len(got), fill)
     assert "holes_priced 100.0% ok" in summary_text or "holes_priced 9" in summary_text, "holes priced check"
     print(f"SEC fill: {len(got)} companies SimFin never had are in universe A; B fills {fill} windows")
+if SCENARIO == "nocover":
+    import re
+    n_a = int(re.search(r"UNIVERSE  .*? ([\d,]+) windows", summary_text).group(1).replace(",", ""))
+    n_v = int(re.search(r"vendor_windows (\d+)", summary_text).group(1))
+    kinds = re.search(r"shares_kind[^·]*", summary_text)
+    assert n_a >= 0.8 * n_v, f"universe A {n_a} against vendor {n_v}: the share count fallback failed"
+    assert "FUNNEL A  " in summary_text and "A VS V    " in summary_text
+    print(f"No cover pages: universe A {n_a:,} windows, vendor universe {n_v:,}")
 if SCENARIO == "locked":
     out = ns["result"]
     assert len(out) and set(out["status"]) <= {"complete", "delisted", "series_ended", "censored", "no_entry"}
