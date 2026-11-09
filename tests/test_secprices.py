@@ -19,7 +19,7 @@ def _company(cusip_of, price_of, shares_of, filers=FILERS, n_filers=20):
     return rows, hold
 
 
-def _build(companies, ftd_px=None, ftd_names=None):
+def _build(companies, ftd_px=None, ftd_names=None, dei=None):
     rows, hold, br = [], [], []
     for cik, (r, h, cus) in companies.items():
         rows += r
@@ -29,7 +29,22 @@ def _build(companies, ftd_px=None, ftd_names=None):
     holders = pd.DataFrame(hold, columns=["cusip", "period", "filer_cik", "shares"])
     bridge = pd.DataFrame(br, columns=["cusip", "cik", "method"]).drop_duplicates("cusip")
     mains = sp.main_cusips(f13, bridge)
-    return sp.build_panel(mains, holders, ftd_px, bridge, as_of_period=PERIODS[-1], ftd_names=ftd_names)
+    return sp.build_panel(mains, holders, ftd_px, bridge, as_of_period=PERIODS[-1], ftd_names=ftd_names, dei=dei)
+
+
+def _px(points):
+    """Fails-to-deliver price table from (cusip, date, price) points, one half-month row each."""
+    rows = [(c, pd.Timestamp(d), float(v), pd.Timestamp(d), float(v)) for c, d, v in points]
+    px = pd.DataFrame(rows, columns=["cusip", "first_date", "first_price", "last_date", "last_price"])
+    return px.assign(max_date=px["first_date"], max_price=px["first_price"], min_date=px["first_date"],
+                     min_price=px["first_price"], n_obs=1)
+
+
+def _dei(cik, before, after, split_month="2014-02"):
+    """Cover-page share counts a month after each quarter-end: `before` until the split month, then `after`."""
+    asof = pd.date_range("2012-10-31", "2015-01-31", freq="3ME")
+    sh = np.where(asof < pd.Timestamp(split_month), before, after)
+    return pd.DataFrame({"cik": cik, "asof": asof, "filed": asof + pd.Timedelta(days=10), "shares": sh})
 
 
 def test_standard_ratios_snap_and_reject_odd_moves():
@@ -153,3 +168,102 @@ def test_dense_panel_adds_half_month_highs_outside_split_quarters():
     out = sp.dense_panel(panel, ev, px, ["CIK5"])
     extra = out[out["price_source"] == "fails max"]
     assert len(extra) == 1 and extra["price"].iloc[0] == pytest.approx(8.0)   # 16 in pre-split units: 8 after
+
+
+def test_validation_tells_split_misses_fakes_and_one_quarter_errors_apart():
+    q = pd.date_range("2015-03-31", "2016-06-30", freq="QE")
+    days = pd.bdate_range("2015-03-02", "2016-07-15")
+    flat = [10.0] * 6
+
+    def series(cik, adj, raw, cusips=None):
+        return pd.DataFrame({"ticker": f"CIK{cik}", "cik": cik, "period": q, "date": q + pd.Timedelta(days=1),
+                             "price": adj, "close_raw": raw, "cusip": cusips or ["C%08d" % cik] * 6,
+                             "n_filers": 12, "price_source": "13F", "source": "sec"})
+
+    panel = pd.concat([
+        series(5, [5, 5.5, 6, 6.5, 7, 7.5], [10, 11, 12, 6.5, 7, 7.5]),           # 2:1 split, found
+        series(6, flat[:2] + [100.0] + flat[3:], flat[:2] + [100.0] + flat[3:]),   # a one-quarter price error
+        series(7, [1, 1, 10, 10, 10, 10], [1, 1, 10, 10, 10, 10],                  # 1:10 reverse split, missed
+               ["OLD000001"] * 2 + ["NEW000001"] * 4),
+        series(8, [5, 5, 10, 10, 10, 10], flat),                                   # a split found that never was
+    ], ignore_index=True)
+    ev = pd.DataFrame({"cik": [5, 8], "period": [q[3], q[2]], "kind": "split", "ratio": [2.0, 2.0],
+                       "evidence": ["holders", "CUSIP change"]})
+    vend = {5: [5, 5.5, 6, 6.5, 7, 7.5], 6: flat, 7: flat, 8: flat}
+    vendor = pd.concat([pd.DataFrame({"ticker": f"V{c}", "date": days, "price": np.interp(days.asi8, q.asi8, p)})
+                        for c, p in vend.items()], ignore_index=True)
+    keys = pd.concat([pd.DataFrame({"ticker": f"V{c}", "start_date": q + pd.Timedelta(days=1), "cik": c})
+                      for c in vend], ignore_index=True)
+    out = sp.validate(panel, ev, vendor, keys)
+    assert out["quarters_compared"] == 20 and out["found_splits"] == 2 and out["found_vendor_flat"] == 1
+    assert out["split_precision"] == 0.5 and out["vendor_splits"] == 2 and out["split_recall"] == 0.5
+    assert out["jumps_up_2x"] == 3 and out["jumps_down_2x"] == 1 and out["jumps_round_trip"] == 1
+    assert out["missed_splits"] == 1 and out["missed_at_cusip_change"] == 1.0 and out["missed_reverse_share"] == 1.0
+    assert out["found_by"] == "CUSIP change 1 (0%) holders 1 (100%)"
+
+
+NOBODY = lambda k: []                                                    # noqa: E731 – no 13F holders to match
+
+
+def test_a_one_quarter_price_error_is_replaced_by_the_fails_close_or_left_out():
+    spike = lambda k: 10000.0 if k == 3 else 10.0 + k                    # noqa: E731 – value reported in the wrong unit
+    a = _company(lambda k: "GGG000010", spike, lambda k, j: 1000 + j)
+    b = _company(lambda k: "GGG000011", spike, lambda k, j: 1000 + j)
+    px = _px([("GGG000010", PERIODS[3] - pd.Timedelta(days=1), 13.0)])
+    panel, _ev, info = _build({10: (*a, ["GGG000010"]), 11: (*b, ["GGG000011"])}, ftd_px=px)
+    assert info["spikes_replaced"] == 1 and info["spikes_dropped"] == 1
+    p10 = panel[panel["ticker"] == "CIK10"].set_index("period")
+    assert p10.loc[PERIODS[3], "price"] == 13.0 and p10.loc[PERIODS[3], "price_source"] == "fails"
+    p11 = panel[panel["ticker"] == "CIK11"]
+    assert len(p11) == 7 and p11["price"].max() < 100 and set(panel["ticker"]) == {"CIK10", "CIK11"}
+
+
+def test_filings_show_a_reverse_split_the_holders_cannot():
+    price = lambda k: (1.0 - 0.05 * k) * (10 if k >= 4 else 1)          # noqa: E731
+    c = _company(lambda k: "FFF000009", price, lambda k, j: 1, filers=NOBODY)
+    panel, ev, info = _build({9: (*c, ["FFF000009"])}, dei=_dei(9, 5e7, 5e6))
+    assert info["splits_filings"] == 1 and ev.iloc[0]["evidence"] == "filings" and ev.iloc[0]["ratio"] == 0.1
+    assert panel["price"].round(3).tolist() == [10.0, 9.5, 9.0, 8.5, 8.0, 7.5, 7.0, 6.5]    # no fake tenfold gain
+    _p, _e, info0 = _build({9: (*c, ["FFF000009"])})                       # without filings: seen, not explained
+    assert info0["unexplained_jumps"] == 1 and info0["splits_filings"] == 0
+
+
+def test_filings_decide_a_cusip_change_the_prices_alone_cannot():
+    def changed(cik, ratio):
+        old, new = f"HHH{cik:06d}", f"III{cik:06d}"
+        c = _company(lambda k: old if k < 4 else new, lambda k: 1.0 if k < 4 else 1.0 / ratio,
+                     lambda k, j: 1, filers=NOBODY)
+        pts = [(old, "2014-02-14", 1.0), (new, "2014-02-18", 1.0 / ratio)]
+        return c, [old, new], pts
+
+    c12, cus12, pts12 = changed(12, 1 / 9)          # 1-for-9: a standard ratio, not a common one
+    c13, cus13, pts13 = changed(13, 0.1)            # 1-for-10 by price, but the share count did not move
+    px = _px(pts12 + pts13)
+    dei = pd.concat([_dei(12, 5.4e7, 6e6), _dei(13, 5e7, 5e7)], ignore_index=True)
+    panel, ev, info = _build({12: (*c12, cus12), 13: (*c13, cus13)}, ftd_px=px, dei=dei)
+    sp12 = ev[(ev["cik"] == 12) & (ev["kind"] == "split")]
+    assert len(sp12) == 1 and sp12.iloc[0]["evidence"] == "CUSIP change + filings"
+    assert abs(sp12.iloc[0]["ratio"] - 1 / 9) < 1e-9 and set(panel.loc[panel["cik"] == 12, "ticker"]) == {"CIK12"}
+    assert set(panel.loc[panel["cik"] == 13, "ticker"]) == {"CIK13", "CIK13~2"}   # not the same equity: new series
+    _p, ev0, _i = _build({12: (*c12, cus12)}, ftd_px=_px(pts12))                  # prices alone: 1-for-9 is too rare
+    assert (ev0["kind"] == "new series").sum() == 1 and (ev0["kind"] == "split").sum() == 0
+
+
+def test_two_holders_with_the_price_show_a_split_and_holders_without_it_do_not():
+    rev = _company(lambda k: "JJJ000014", lambda k: (1.0 - 0.05 * k) * (10 if k >= 4 else 1),
+                   lambda k, j: 1000 * (0.1 if k >= 4 else 1), filers=lambda k: [900001, 900002])
+    flip = _company(lambda k: "KKK000015", lambda k: 10.0, lambda k, j: (5000 + j) * (0.1 if k >= 4 else 1))
+    panel, ev, info = _build({14: (*rev, ["JJJ000014"]), 15: (*flip, ["KKK000015"])})
+    sp14 = ev[(ev["cik"] == 14) & (ev["kind"] == "split")]
+    assert len(sp14) == 1 and sp14.iloc[0]["evidence"] == "holders (few)" and info["splits_few_holders"] == 1
+    assert info["holder_splits_rejected"] == 1 and (ev["cik"] == 15).sum() == 0
+    assert panel.loc[panel["cik"] == 15, "price"].tolist() == [10.0] * 8      # a share-class flip is no split
+
+
+def test_one_holder_needs_the_filings_to_agree():
+    rev = _company(lambda k: "LLL000016", lambda k: (1.0 - 0.05 * k) * (10 if k >= 4 else 1),
+                   lambda k, j: 1000 * (0.1 if k >= 4 else 1), filers=lambda k: [900001])
+    _p, ev, info = _build({16: (*rev, ["LLL000016"])})
+    assert info["splits_few_holders"] == 0 and info["unexplained_jumps"] == 1         # one holder alone: no
+    _p, ev, info = _build({16: (*rev, ["LLL000016"])}, dei=_dei(16, 5e7, 5e6))
+    assert info["splits_few_holders"] == 1 and ev.iloc[0]["ratio"] == 0.1             # with the filings: yes

@@ -8,8 +8,11 @@ price at every quarter-end:
   * where 13F has none (before the 13F data sets begin in 2013, or a thin quarter), from
     the SEC fails-to-deliver files – the closing price dated nearest the quarter-end,
     within 10 days.
-Splits are found from holders and CUSIP changes (aem_research.splits) and every price is
-restated in the units after the company's last split. A change of CUSIP that is neither
+Splits are found from holders, CUSIP changes and the filings' cover-page share counts
+(aem_research.splits; every split must move the price with it) and every price is
+restated in the units after the company's last split. A one-quarter price error (far
+from both neighbouring quarter-ends, which agree) gives way to the fails-to-deliver
+close of that quarter-end, or is left out. A change of CUSIP that is neither
 a split nor the same security (holders or prices show neither) starts a new series: old
 equity cancelled in a reorganization is not the new equity. When a series stops before
 the panel's as-of date, the last fails-to-deliver price within the following quarter is
@@ -38,6 +41,14 @@ FINAL_MAX_RISE = 3.0
 MAX_GAP_DAYS = 200            # one missing quarter does not end a series; two do
 COMPLETE_SHARE = 0.9          # as-of: the last quarter whose 13F coverage is at least 90% of the prior four
 SOURCE = "sec"
+SPIKE_MOVE = 4.0              # a one-quarter price error: at least 4x away from both neighbours ...
+SPIKE_BACK = 1.5              # ... which agree with each other within 50%
+SANE_MOVE = 6.0               # a split must leave a split-adjusted quarterly move within 1/6 to 6x
+FILING_MOVE = 2.5             # splits read from filings: the adjusted move within 1/2.5 to 2.5x
+FILING_TOL = 0.08             # the filings' share-count ratio within 8% of a standard ratio
+FILING_MIN = 1.9              # ... of at least 2-for-1 either way (issuance blurs smaller ones)
+DEI_AGREE = 0.35              # at a CUSIP change, the filings' ratio within 35% of the price ratio
+JUMP = 2.5                    # a quarter-to-quarter price move this large asks for evidence
 
 PANEL_COLS = ["ticker", "cik", "date", "period", "price", "close_raw", "cusip", "price_source", "source", "n_filers"]
 
@@ -195,14 +206,101 @@ def _fill_choice(cp: pd.DataFrame, prefer: str | None, symbols: dict, main_symbo
     return None
 
 
+def _dei_index(dei: pd.DataFrame | None, ciks) -> dict:
+    """cik -> (as-of dates, share counts), sorted, for the cover-page share counts on file."""
+    if dei is None or not len(dei):
+        return {}
+    d = dei[dei["cik"].isin(ciks)].sort_values(["cik", "asof"], kind="mergesort")
+    return {int(c): (g["asof"].to_numpy(dtype="datetime64[ns]"), g["shares"].to_numpy(dtype="float64"))
+            for c, g in d.groupby("cik", sort=False)}
+
+
+def _dei_ratio(idx: dict, cik, p0, p1, max_days: int = 200) -> float:
+    """Shares counted after p1 over shares counted on or before p0 (a split between the two
+    quarter-ends changes the count by its ratio), NaN without a count on each side within
+    `max_days`. Counts are dated by month, so 'after p1' means a later month."""
+    x = idx.get(int(cik))
+    if x is None:
+        return np.nan
+    asof, sh = x
+    t0, t1 = np.datetime64(pd.Timestamp(p0), "ns"), np.datetime64(pd.Timestamp(p1), "ns")
+    j0 = int(np.searchsorted(asof, t0, side="right")) - 1
+    j1 = int(np.searchsorted(asof, t1, side="right"))
+    if j0 < 0 or j1 >= asof.size:
+        return np.nan
+    lim = np.timedelta64(max_days, "D")
+    if asof[j0] < t0 - lim or asof[j1] > t1 + lim or sh[j0] <= 0 or sh[j1] <= 0:
+        return np.nan
+    return float(sh[j1] / sh[j0])
+
+
+def _sane(r_raw: float, s: float, lim: float) -> bool:
+    """A split of ratio s leaves the split-adjusted move r_raw * s within 1/lim to lim."""
+    return bool(np.isfinite(r_raw) and r_raw > 0 and s > 0 and abs(np.log(r_raw * s)) <= np.log(lim))
+
+
+def _few_holders(hrow) -> float | None:
+    """One or two matched holders (too few for the holder test) whose median share ratio is
+    within 3% of a standard ratio of at least 1.2 either way – the ratio, or None."""
+    if hrow is None or not (1 <= int(hrow.get("matched", 0)) < sp.MIN_MATCHED):
+        return None
+    med, r = float(hrow.get("median_ratio", np.nan)), float(hrow.get("ratio", np.nan))
+    if not (np.isfinite(med) and np.isfinite(r)) or abs(np.log(r)) < np.log(sp.MIN_MOVE):
+        return None
+    return r if abs(np.log(med / r)) <= np.log(1 + sp.MEDIAN_TOL) else None
+
+
+def _filing_split(s_f: float, r_raw: float) -> float | None:
+    """A split read from the filings' share counts: their ratio within FILING_TOL of a standard
+    ratio of at least FILING_MIN either way, and the price moved the other way by about as
+    much (split-adjusted move within FILING_MOVE)."""
+    if not (np.isfinite(s_f) and s_f > 0):
+        return None
+    std, dist = sp.snap([s_f])
+    s = float(std[0])
+    if dist[0] <= np.log(1 + FILING_TOL) and abs(np.log(s)) >= np.log(FILING_MIN) and _sane(r_raw, s, FILING_MOVE):
+        return s
+    return None
+
+
+def _spikes(q: pd.DataFrame, gap_limit: pd.Timedelta) -> np.ndarray:
+    """Rows whose price jumps at least SPIKE_MOVE-fold against both neighbours, in opposite
+    directions, while the neighbours agree within SPIKE_BACK: one-quarter price errors (a
+    13F median from filers who reported value in the wrong unit, say). A split moves the
+    price once and for good, so it never looks like this."""
+    n = len(q)
+    out = np.zeros(n, dtype=bool)
+    if n < 3:
+        return out
+    p = q["price"].to_numpy(dtype="float64")
+    t = q["period"].to_numpy(dtype="datetime64[ns]")
+    lim = np.timedelta64(int(gap_limit / pd.Timedelta(days=1)), "D")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        a = np.log(p[1:-1] / p[:-2])
+        b = np.log(p[2:] / p[1:-1])
+    near = ((t[1:-1] - t[:-2]) <= lim) & ((t[2:] - t[1:-1]) <= lim)
+    hit = near & (np.abs(a) >= np.log(SPIKE_MOVE)) & (np.abs(b) >= np.log(SPIKE_MOVE)) & (a * b < 0) \
+        & (np.abs(a + b) <= np.log(SPIKE_BACK))
+    out[1:-1] = np.nan_to_num(hit, nan=0).astype(bool)
+    return out
+
+
 def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.DataFrame | None,
                 bridge_tab: pd.DataFrame, *, as_of_period, ftd_names: pd.DataFrame | None = None,
-                lookback_quarters: int = 13, max_gap_days: int = MAX_GAP_DAYS) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+                lookback_quarters: int = 13, max_gap_days: int = MAX_GAP_DAYS,
+                dei: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """(panel, events, info). panel: PANEL_COLS, one row per series and quarter-end (plus a
     final fails-to-deliver price where a series stops early). events: splits and new series
-    (cik, period, kind, ratio, evidence, matched, agree)."""
+    (cik, period, kind, ratio, evidence, matched, agree).
+
+    `dei` (cik, asof, filed, shares – fundamentals.dei_share_history) adds the filings'
+    cover-page share counts as split evidence: it confirms or refutes a split read from
+    prices at a CUSIP change, and finds splits the holders cannot show (too few of them)
+    where the price moved by the same ratio."""
     info = {"companies": 0, "series": 0, "quarters_13f": 0, "quarters_fails": 0, "final_prices": 0,
-            "splits_holders": 0, "splits_cusip": 0, "new_series": 0, "fails_dropped_at_split": 0}
+            "splits_holders": 0, "splits_cusip": 0, "splits_filings": 0, "splits_few_holders": 0,
+            "holder_splits_rejected": 0, "new_series": 0, "fails_dropped_at_split": 0,
+            "spikes_replaced": 0, "spikes_dropped": 0, "unexplained_jumps": 0}
     ev_cols = ["cik", "period", "kind", "ratio", "evidence", "matched", "agree"]
     if mains is None or mains.empty or as_of_period is None:
         return pd.DataFrame(columns=PANEL_COLS), pd.DataFrame(columns=ev_cols), info
@@ -240,6 +338,7 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
         hm = holders.merge(m[["cik", "period", "cusip"]], on=["cusip", "period"], how="inner")
         hr = sp.holder_ratios(hm[["cik", "period", "filer_cik", "shares"]], pairs)
     hr_idx = {(int(r.cik), pd.Timestamp(r.period)): r._asdict() for r in hr.itertuples(index=False)} if len(hr) else {}
+    dei_idx = _dei_index(dei, ciks)
 
     rows, events = [], []
     one_day = pd.Timedelta(days=1)
@@ -247,6 +346,7 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
     for cik, g in m.groupby("cik", sort=False):
         g = g.sort_values("period")
         q = g[["period", "cusip", "price", "src", "n_filers"]].copy()
+        q["n_filers"] = q["n_filers"].astype("float64")
         fqc = fq_by_cik.get(cik)
         if fqc is not None and len(fqc):
             have = set(q["period"])
@@ -268,6 +368,30 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                     q = pd.concat([q, pd.DataFrame(fill, columns=q.columns)], ignore_index=True)
         q = q.sort_values("period").reset_index(drop=True)
 
+        # one-quarter price errors: the fails-to-deliver close of that quarter-end if it fits the
+        # neighbours, else the quarter is left out (one missing quarter does not end a series)
+        bad = np.flatnonzero(_spikes(q, gap_limit))
+        if bad.size:
+            gone = []
+            for i in bad:
+                rep = None
+                if q.at[i, "src"] == "13f" and fqc is not None and len(fqc):
+                    cp = fqc[fqc["period"] == q.at[i, "period"]]
+                    pick = _fill_choice(cp, q.at[i, "cusip"], symbols, symbols.get(q.at[i, "cusip"], set())) \
+                        if len(cp) else None
+                    if pick is not None:
+                        fp, lo_, hi_ = float(pick["price"]), float(q.at[i - 1, "price"]), float(q.at[i + 1, "price"])
+                        if fp > 0 and abs(np.log(fp / lo_)) <= np.log(2) and abs(np.log(hi_ / fp)) <= np.log(2):
+                            rep = (fp, pick["cusip"])
+                if rep is not None:
+                    q.at[i, "price"], q.at[i, "cusip"], q.at[i, "src"], q.at[i, "n_filers"] = rep[0], rep[1], "fails", np.nan
+                    info["spikes_replaced"] += 1
+                else:
+                    gone.append(i)
+                    info["spikes_dropped"] += 1
+            if gone:
+                q = q.drop(index=gone).reset_index(drop=True)
+
         # walk forward: splits, continuations and new series
         n = len(q)
         seg = np.ones(n, dtype=int)
@@ -279,19 +403,32 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                 seg[i] = seg[i - 1]
                 p0, p1 = q.at[i - 1, "period"], q.at[i, "period"]
                 c0, c1 = q.at[i - 1, "cusip"], q.at[i, "cusip"]
+                px0, px1 = float(q.at[i - 1, "price"]), float(q.at[i, "price"])
+                r_raw = px1 / px0 if px0 > 0 and px1 > 0 else np.nan
+                both13 = q.at[i, "src"] == "13f" and q.at[i - 1, "src"] == "13f"
+                done = False
                 if p1 - p0 > gap_limit:
                     seg[i] += 1
                     events.append((cik, p1, "new series", np.nan, "gap", 0, np.nan))
-                elif q.at[i, "src"] == "13f" and prev13 >= 0 and seg[prev13] == seg[i] \
-                        and (cik, p1) in hr_idx and sp.holder_split(hr_idx[(cik, p1)]) is not None:
+                    done = True
+                if not done and q.at[i, "src"] == "13f" and prev13 >= 0 and seg[prev13] == seg[i] \
+                        and (cik, p1) in hr_idx:
                     hrow = hr_idx[(cik, p1)]
-                    ratio_at[i] = sp.holder_split(hrow)
-                    events.append((cik, p1, "split", ratio_at[i], "holders", int(hrow["matched"]), float(hrow["agree"])))
-                    between = np.arange(prev13 + 1, i)                 # fails prices of unknown side of the split
-                    drop[between] = True
-                    info["fails_dropped_at_split"] += int(len(between))
-                elif c0 != c1:
-                    hrow = hr_idx.get((cik, p1)) if q.at[i, "src"] == "13f" and q.at[i - 1, "src"] == "13f" else None
+                    s = sp.holder_split(hrow)
+                    if s is not None:
+                        p13 = float(q.at[prev13, "price"])
+                        if p13 > 0 and _sane(px1 / p13, s, SANE_MOVE):
+                            ratio_at[i] = s
+                            events.append((cik, p1, "split", s, "holders", int(hrow["matched"]), float(hrow["agree"])))
+                            between = np.arange(prev13 + 1, i)             # fails prices of unknown side of the split
+                            drop[between] = True
+                            info["fails_dropped_at_split"] += int(len(between))
+                            done = True
+                        else:
+                            info["holder_splits_rejected"] += 1            # the price did not move with it
+                if not done and c0 != c1:
+                    done = True
+                    hrow = hr_idx.get((cik, p1)) if both13 else None
                     if not (hrow is not None and sp.holders_same(hrow)):
                         verdict, r = "break", None
                         old, new = pts_by_cusip.get(c0), pts_by_cusip.get(c1)
@@ -303,12 +440,52 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
                                 if len(gap) and gap.min() <= pd.Timedelta(days=sp.SWITCH_DAYS):
                                     fn = new.loc[gap.idxmin()]
                                     verdict, r = sp.price_switch(float(lo["price"]), float(fn["price"]))
+                        s_f = _dei_ratio(dei_idx, cik, p0, p1)
+                        evid = "CUSIP change"
+                        if verdict == "split":
+                            if np.isfinite(s_f):
+                                if abs(np.log(s_f / r)) > np.log(1 + DEI_AGREE):
+                                    verdict = "break"                      # the share count did not move with it
+                                else:
+                                    evid = "CUSIP change + filings"
+                            elif sp.snap_common([r])[1][0] > np.log(1 + sp.PRICE_TOL):
+                                verdict = "break"                          # an uncommon ratio, from prices alone
+                        if verdict == "break" and np.isfinite(s_f):
+                            s = _filing_split(s_f, r_raw)
+                            if s is not None:
+                                verdict, r, evid = "split", s, "CUSIP change + filings"
+                        if verdict == "split" and np.isfinite(r_raw) and not _sane(r_raw, r, SANE_MOVE):
+                            verdict = "break"
                         if verdict == "split":
                             ratio_at[i] = r
-                            events.append((cik, p1, "split", r, "CUSIP change", 0, np.nan))
+                            events.append((cik, p1, "split", r, evid, 0, np.nan))
                         elif verdict == "break":
                             seg[i] += 1
                             events.append((cik, p1, "new series", np.nan, "CUSIP change", 0, np.nan))
+                if not done and np.isfinite(r_raw) and abs(np.log(r_raw)) >= np.log(JUMP):
+                    # a large move and no verdict yet: one or two holders, or the filings' share counts
+                    hrow = hr_idx.get((cik, p1)) if both13 else None
+                    s_h = _few_holders(hrow)
+                    s_f = _dei_ratio(dei_idx, cik, p0, p1)
+                    s, evid = None, None
+                    if s_h is not None and _sane(r_raw, s_h, FILING_MOVE):
+                        # one holder can move by a split-like ratio through trading: the filings
+                        # must agree, or, without filings, both of two holders
+                        if np.isfinite(s_f):
+                            ok = abs(np.log(s_f / s_h)) <= np.log(1 + DEI_AGREE)
+                        else:
+                            ok = int(hrow["matched"]) >= 2 and float(hrow["agree"]) >= 1.0
+                        if ok:
+                            s, evid = s_h, "holders (few)"
+                    if s is None and np.isfinite(s_f):
+                        s = _filing_split(s_f, r_raw)
+                        evid = "filings" if s is not None else None
+                    if s is not None:
+                        ratio_at[i] = s
+                        events.append((cik, p1, "split", s, evid, int(hrow["matched"]) if hrow else 0,
+                                       float(hrow["agree"]) if hrow else np.nan))
+                    else:
+                        info["unexplained_jumps"] += 1
             if q.at[i, "src"] == "13f":
                 prev13 = i
         keep = ~drop
@@ -358,9 +535,13 @@ def build_panel(mains: pd.DataFrame, holders: pd.DataFrame | None, ftd_px: pd.Da
     ev = pd.DataFrame(events, columns=ev_cols)
     if len(ev):
         ev["period"] = pd.to_datetime(ev["period"]).astype("datetime64[ns]")
-    info["splits_holders"] = int(((ev["kind"] == "split") & (ev["evidence"] == "holders")).sum()) if len(ev) else 0
-    info["splits_cusip"] = int(((ev["kind"] == "split") & (ev["evidence"] == "CUSIP change")).sum()) if len(ev) else 0
-    info["new_series"] = int((ev["kind"] == "new series").sum()) if len(ev) else 0
+    if len(ev):
+        spl = ev[ev["kind"] == "split"]["evidence"].astype(str)
+        info["splits_holders"] = int((spl == "holders").sum())
+        info["splits_cusip"] = int(spl.str.startswith("CUSIP change").sum())
+        info["splits_filings"] = int((spl == "filings").sum())
+        info["splits_few_holders"] = int((spl == "holders (few)").sum())
+        info["new_series"] = int((ev["kind"] == "new series").sum())
     return panel, ev, info
 
 
@@ -438,9 +619,12 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
     out = {"quarters_compared": 0}
     if panel is None or panel.empty or vendor_panel is None or vendor_panel.empty or vendor_keys is None:
         return out
-    sec = panel[panel["price_source"] == "13F"][["ticker", "cik", "period", "price", "close_raw"]].copy()
+    keep = ["ticker", "cik", "period", "price", "close_raw"] + [c for c in ("cusip", "n_filers") if c in panel.columns]
+    sec = panel[panel["price_source"] == "13F"][keep].copy()
     sec = sec.sort_values(["ticker", "period"])
     sec["prev_period"] = sec.groupby("ticker")["period"].shift(1)
+    if "cusip" in sec.columns:
+        sec["cusip_prev"] = sec.groupby("ticker")["cusip"].shift(1)
     sec["r_sec"] = sec["price"] / sec.groupby("ticker")["price"].shift(1)
     sec["r_raw"] = sec["close_raw"] / sec.groupby("ticker")["close_raw"].shift(1)
     sec = sec.dropna(subset=["prev_period", "r_sec"])
@@ -473,22 +657,54 @@ def validate(panel: pd.DataFrame, events: pd.DataFrame, vendor_panel: pd.DataFra
     a = a[(a["v"] > 0) & (a["v_prev"] > 0)]
     if a.empty:
         return out
-    r_v = a["v"] / a["v_prev"]
-    agree = np.abs(np.log(a["r_sec"] / r_v)) <= np.log(1 + tol)
-    implied = 1.0 / (a["r_raw"] / r_v)                       # = the split ratio when one happened
-    std, dist = sp.snap(implied.to_numpy())
-    vend_split = (np.abs(np.log(std)) >= np.log(sp.MIN_MOVE)) & (dist <= np.log(1 + tol))
-    found = a[["cik", "period"]].merge(events[events["kind"] == "split"][["cik", "period", "ratio"]]
-                                       if events is not None and len(events) else
-                                       pd.DataFrame(columns=["cik", "period", "ratio"]),
-                                       on=["cik", "period"], how="left")["ratio"].to_numpy(dtype="float64")
+    a = a.sort_values(["ticker", "period"], kind="mergesort").reset_index(drop=True)
+    r_v = (a["v"] / a["v_prev"]).to_numpy()
+    gap = np.log(a["r_sec"].to_numpy() / r_v)                 # SEC over vendor, log: 0 when they agree
+    agree = np.abs(gap) <= np.log(1 + tol)
+    implied = r_v / a["r_raw"].to_numpy()                     # = the split ratio when one happened
+    # a gap the next quarter undoes is a one-quarter price error (either source), not a split
+    nxt = pd.Series(gap).groupby(a["ticker"].to_numpy()).shift(-1).to_numpy()
+    nxt_prev = a.groupby("ticker")["prev_period"].shift(-1).to_numpy()
+    linked = nxt_prev == a["period"].to_numpy()
+    nxt = np.where(linked, nxt, np.nan)
+    trip_start = (np.abs(gap) >= np.log(2)) & (np.abs(gap + nxt) <= np.log(1.25))
+    trip_end = np.zeros(len(a), dtype=bool)                   # the quarter that undoes it
+    trip_end[1:] = trip_start[:-1] & linked[:-1]
+    round_trip = trip_start | trip_end
+    # the vendor's splits: its implied ratio within 5% of a common ratio (the dense standard set
+    # would call almost any large disagreement a split), and no one-quarter round trip
+    cstd, cdist = sp.snap_common(implied)
+    vend_split = (np.abs(np.log(cstd)) >= np.log(sp.MIN_MOVE)) & (cdist <= np.log(1.05)) & ~round_trip
+    ev = pd.DataFrame(columns=["cik", "period", "ratio", "evidence"])
+    if events is not None and len(events):
+        ev = events[events["kind"] == "split"].reindex(columns=["cik", "period", "ratio", "evidence"])
+        ev["evidence"] = ev["evidence"].fillna("n/a")
+    fm = a[["cik", "period"]].merge(ev.drop_duplicates(["cik", "period"]), on=["cik", "period"], how="left")
+    found = fm["ratio"].to_numpy(dtype="float64")
     has = np.isfinite(found)
-    match = has & vend_split & (np.abs(np.log(np.where(has, found, 1.0) / np.where(vend_split, std, 1.0)))
-                                <= np.log(1 + sp.MEDIAN_TOL))
+    fit = has & (np.abs(np.log(np.where(has, found, 1.0) / implied)) <= np.log(1 + tol))   # vendor moved by it
+    flat = has & (np.abs(np.log(implied)) < np.log(1 + tol))                              # vendor: no split
+    match = vend_split & fit
     out.update({"quarters_compared": int(len(a)), "returns_agree": round(float(agree.mean()), 4),
                 "vendor_splits": int(vend_split.sum()), "found_splits": int(has.sum()),
                 "split_recall": round(float(match.sum() / vend_split.sum()), 4) if vend_split.sum() else None,
-                "split_precision": round(float(match.sum() / has.sum()), 4) if has.sum() else None})
+                "split_precision": round(float(fit.sum() / has.sum()), 4) if has.sum() else None,
+                "found_vendor_flat": int(flat.sum()),
+                "jumps_up_2x": int((gap >= np.log(2)).sum()), "jumps_down_2x": int((gap <= -np.log(2)).sum()),
+                "jumps_round_trip": int(trip_start.sum())})
+    if has.any():
+        by = pd.DataFrame({"evidence": fm["evidence"].astype(str).to_numpy()[has], "fit": fit[has]})
+        out["found_by"] = " ".join(f"{e} {len(g)} ({g['fit'].mean():.0%})" for e, g in by.groupby("evidence"))
+    miss = vend_split & ~fit
+    if miss.any():
+        cus_change = (a["cusip"].to_numpy() != a["cusip_prev"].to_numpy()) if "cusip_prev" in a.columns else None
+        out["missed_splits"] = int(miss.sum())
+        if cus_change is not None:
+            out["missed_at_cusip_change"] = round(float(cus_change[miss].mean()), 4)
+        if "n_filers" in a.columns:
+            out["missed_filers_median"] = float(np.nanmedian(pd.to_numeric(a["n_filers"], errors="coerce")
+                                                             .to_numpy(dtype="float64")[miss]))
+        out["missed_reverse_share"] = round(float((cstd[miss] < 1).mean()), 4)
     return out
 
 

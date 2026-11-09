@@ -446,7 +446,7 @@ Every price the primary analysis uses comes from SEC filings, so the companies t
 
 phase("F SEC prices", before="""
 # ── Phase F · SEC price panel: 13F quarter-end prices, fails-to-deliver files, splits ──
-from aem_research import secprices
+from aem_research import fundamentals as fu, secprices
 from aem_research.data import ftd
 
 SEC_PANEL, SEC_EVENTS, SEC_BRIDGE, SEC_AS_OF, FTD_PX, SEC_INFO = None, None, None, None, None, {}
@@ -470,24 +470,32 @@ elif SEC_BRIDGE is not None:
     holders = thirteenf.load_holders(paths.sec_dir, cusips=mains["cusip"].unique())
     holders = holders.merge(mains[["cusip", "period"]].drop_duplicates(), on=["cusip", "period"], how="inner")
     FTD_PX = ftd.load_px(paths.sec_dir, cusips=SEC_BRIDGE.loc[SEC_BRIDGE["cik"].isin(set(mains["cik"])), "cusip"].unique())
+    # the filings' cover-page share counts: split evidence where holders are too few or a CUSIP changed
+    sec_dei = fu.dei_share_history(facts) if facts is not None and len(facts) else None
     SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
                                                             ftd_names=FTD_NAMES,
-                                                            max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
-    del holders, mains
+                                                            max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200),
+                                                            dei=sec_dei)
+    del holders, mains, sec_dei
     SEC_AS_OF = secprices.as_of_date(as_of_q)
     save_table(SEC_PANEL, paths.cache / "sec_panel")
     save_table(SEC_EVENTS, paths.cache / "sec_splits")
     print(f"SEC panel: {SEC_INFO['companies']:,} companies, {SEC_INFO['series']:,} series, as of {SEC_AS_OF.date()} · "
           f"quarters from 13F {SEC_INFO['quarters_13f']:,}, from fails files {SEC_INFO['quarters_fails']:,}, "
           f"final prices {SEC_INFO['final_prices']:,}")
-    print(f"Splits: {SEC_INFO['splits_holders']:,} from holders, {SEC_INFO['splits_cusip']:,} at CUSIP changes · "
-          f"new series {SEC_INFO['new_series']:,}")
+    print(f"Splits: {SEC_INFO['splits_holders']:,} from holders, {SEC_INFO['splits_cusip']:,} at CUSIP changes, "
+          f"{SEC_INFO['splits_filings']:,} from filings, {SEC_INFO['splits_few_holders']:,} from one or two holders · "
+          f"new series {SEC_INFO['new_series']:,} · one-quarter price errors {SEC_INFO['spikes_replaced']:,} replaced, "
+          f"{SEC_INFO['spikes_dropped']:,} left out · large moves without evidence {SEC_INFO['unexplained_jumps']:,}")
     REPORT["sec_prices"] = {"companies": SEC_INFO["companies"], "series": SEC_INFO["series"],
                             "as_of": str(SEC_AS_OF.date()), "quarters_13f": SEC_INFO["quarters_13f"],
                             "quarters_fails": SEC_INFO["quarters_fails"], "final_prices": SEC_INFO["final_prices"],
                             "bridge": SEC_BRIDGE["method"].value_counts().to_dict()}
     REPORT["splits"] = {"from_holders": SEC_INFO["splits_holders"], "at_cusip_changes": SEC_INFO["splits_cusip"],
-                        "new_series": SEC_INFO["new_series"]}
+                        "from_filings": SEC_INFO["splits_filings"], "from_few_holders": SEC_INFO["splits_few_holders"],
+                        "holder_splits_rejected": SEC_INFO["holder_splits_rejected"],
+                        "new_series": SEC_INFO["new_series"], "spikes_replaced": SEC_INFO["spikes_replaced"],
+                        "spikes_dropped": SEC_INFO["spikes_dropped"], "unexplained_jumps": SEC_INFO["unexplained_jumps"]}
 """, after="""
 save_report()
 """)

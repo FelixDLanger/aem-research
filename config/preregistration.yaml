@@ -132,9 +132,11 @@ review_before_lock:
     class. Review the power table (smallest detectable likelihood ratio per cohort). For
     the SEC price panel (D10): quarterly returns agree with the vendors' split-adjusted
     prices within 10% for at least 95% of company-quarters, split detection reaches 90%
-    precision and recall against the splits the vendors' adjustments imply, and the panel
-    prices at least 80% of the vendor panel's holes that are exchange-listed. If a check
-    fails, fix the definition here before locking.
+    precision and recall against the splits the vendors' adjustments imply (as defined
+    in price_basis.validation), and the panel prices at least 80% of the vendor panel's
+    holes that are exchange-listed. Universe A must be of the same order as the vendor
+    universe on the same dates (the FUNNEL A and A VS V lines show each filter's share).
+    If a check fails, fix the definition here before locking.
 
 hypotheses:
   - id: H1
@@ -334,12 +336,26 @@ price_basis:
     quarter-ends the ten largest 13F holders of the main CUSIP present in both are
     matched; a split is recorded when at least three are matched, their median share
     ratio is within 3% of a standard ratio (those companies use: 6:5 to 100:1 forward,
-    1:2 to 1:1000 reverse), at least half of them are within 5% of it, and the ratio is
-    at least 1.2 or at most 1/1.2. Fails-to-deliver prices between two 13F quarters that straddle a
-    split are dropped. Where holders cannot be matched (before 2013), a change of main
-    CUSIP is a split when the last daily price under the old CUSIP over the first under
-    the new one (at most 30 days apart) is within 6% of a standard ratio; a split
-    without a CUSIP change before 2013 cannot be seen (a limit to report).
+    1:2 to 1:1000 reverse), at least half of them are within 5% of it, the ratio is
+    at least 1.2 or at most 1/1.2, and the price moved with it (the split-adjusted
+    quarterly move within 1/6 to 6 times; a share-class flip moves no price).
+    Fails-to-deliver prices between two 13F quarters that straddle a split are dropped.
+    At a change of main CUSIP without holder evidence, the last daily price under the
+    old CUSIP over the first under the new one (at most 30 days apart) gives the ratio
+    (within 6% of a standard ratio); the cover-page share counts in the filings
+    (dei:EntityCommonStockSharesOutstanding, counted on or before the earlier
+    quarter-end and after the later one) must agree within 35%, and without filings the
+    ratio must be a common one (2:1 to 10:1 forward, 1:2 to 1:100 reverse; the full
+    standard set is so dense below 1:10 that any price ratio lands near one of its
+    members). Where neither prices nor holders decide, the filings alone record a split
+    when their share ratio is within 8% of a standard ratio of at least 2:1 either way
+    and the price moved the other way by about as much (split-adjusted move within
+    1/2.5 to 2.5 times). Any quarter-to-quarter move of 2.5 times or more is checked the
+    same way – one or two matched holders within 3% of a standard ratio, or the
+    filings – and counted when nothing explains it. A one-quarter price error (at
+    least 4 times away from both neighbouring quarter-ends, which agree within 50%) is
+    replaced by the fails-to-deliver close of that quarter-end when it fits the
+    neighbours, else left out.
   new_series: >-
     A change of main CUSIP that holders show to be the same security (median ratio within
     15% of 1) or prices show to be the same (within 25%) continues the series; one that is
@@ -375,16 +391,21 @@ price_basis:
   validation: >-
     Before the lock and without outcomes: quarterly returns of the SEC panel against the
     vendors' split-adjusted prices for the same company and quarter (agreement within
-    10%), and splits found against the splits the vendors' adjustments imply (13F price
-    ratio over vendor return near a standard ratio): precision and recall. Thresholds in
+    10%), and splits found against the splits the vendors' adjustments imply: the vendor
+    return over the 13F price ratio within 5% of a common ratio, one-quarter round trips
+    (a gap the next quarter undoes) excluded as price errors. Recall: the vendor's splits
+    found with the vendor's ratio (within 10%); precision: splits found that the vendor's
+    prices moved by. Also counted: quarters where the SEC return is at least twice or at
+    most half the vendor's, and splits found where the vendor shows none. Thresholds in
     review_before_lock.
   calibration: >-
     The ratio of quarter-end to daily touch rates on the vendor panel, for windows that
     start on the quarterly dates of 2009-2012 (before the sample, so no sample window is
     computed): vendor tickers priced at US$1 or more with market cap US$100m-2bn (vendor
-    close times vendor shares) and median 20-day dollar volume of at least US$100k. Only
-    the ratios are shown. They translate the study's quarter-end touch rates into daily
-    ones for the terminal.
+    close times the cover-page share count filed within 15 months, else the vendor's
+    share count) and median 20-day dollar volume of at least US$100k. Only the ratios
+    are shown. They translate the study's quarter-end touch rates into daily ones for
+    the terminal.
 
 outcomes:
   horizons_years: [3, 5, 10]

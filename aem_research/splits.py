@@ -15,6 +15,10 @@ public evidence find splits without a vendor:
     be matched (before 13F data begin in 2013), the last daily price under the old
     CUSIP and the first under the new one, at most 30 days apart, give the ratio
     (within 6% of a standard ratio).
+  * the filings – the cover-page share count (dei:EntityCommonStockSharesOutstanding)
+    changes by the split ratio. aem_research.secprices uses it to confirm or refute a
+    ratio read from prices at a CUSIP change, and to find splits where holders are too
+    few, when the price moved the other way by about as much.
 
 A ratio r means one old share became r new shares (2 for a 2-for-1 split, 0.1 for a
 1-for-10 reverse split): prices before the split are divided by r to match later ones.
@@ -47,19 +51,36 @@ def _standard_ratios() -> np.ndarray:
 
 STANDARD = _standard_ratios()
 _LOG_STD = np.log(STANDARD)
+# The ratios most splits use. Below 1:10 the standard set is so dense (every 1:k) that,
+# with a few percent of tolerance, almost any price ratio lands near one of them; price
+# evidence alone (a vendor's implied ratio, a price switch at a CUSIP change) is
+# therefore read against this sparser set, where a match means something.
+COMMON = np.array(sorted({5 / 4, 4 / 3, 3 / 2, 2.0, 5 / 2, 3.0, 4.0, 5.0, 10.0}
+                         | {1.0 / k for k in (2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100)}),
+                  dtype="float64")
+_LOG_COMMON = np.log(COMMON)
+
+
+def _snap(x, ratios: np.ndarray, log_ratios: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x = np.asarray(x, dtype="float64")
+    lx = np.log(np.where(x > 0, x, np.nan))
+    j = np.clip(np.searchsorted(log_ratios, lx), 1, len(ratios) - 1)
+    lo, hi = log_ratios[j - 1], log_ratios[j]
+    pick = np.where(np.abs(lx - lo) <= np.abs(lx - hi), j - 1, j)
+    r = ratios[pick]
+    dist = np.abs(lx - log_ratios[pick])
+    r = np.where(np.isfinite(lx), r, np.nan)
+    return r, np.where(np.isfinite(lx), dist, np.nan)
 
 
 def snap(x) -> tuple[np.ndarray, np.ndarray]:
     """(nearest standard ratio, |log distance|) for each value (NaN where x <= 0)."""
-    x = np.asarray(x, dtype="float64")
-    lx = np.log(np.where(x > 0, x, np.nan))
-    j = np.clip(np.searchsorted(_LOG_STD, lx), 1, len(STANDARD) - 1)
-    lo, hi = _LOG_STD[j - 1], _LOG_STD[j]
-    pick = np.where(np.abs(lx - lo) <= np.abs(lx - hi), j - 1, j)
-    r = STANDARD[pick]
-    dist = np.abs(lx - _LOG_STD[pick])
-    r = np.where(np.isfinite(lx), r, np.nan)
-    return r, np.where(np.isfinite(lx), dist, np.nan)
+    return _snap(x, STANDARD, _LOG_STD)
+
+
+def snap_common(x) -> tuple[np.ndarray, np.ndarray]:
+    """(nearest common ratio, |log distance|) for each value (NaN where x <= 0)."""
+    return _snap(x, COMMON, _LOG_COMMON)
 
 
 def holder_ratios(holders: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
@@ -121,4 +142,5 @@ def price_switch(old_last: float, new_first: float) -> tuple[str, float | None]:
     return "break", None
 
 
-__all__ = ["STANDARD", "snap", "holder_ratios", "holder_split", "holders_same", "price_switch", "MIN_MATCHED"]
+__all__ = ["STANDARD", "COMMON", "snap", "snap_common", "holder_ratios", "holder_split", "holders_same",
+           "price_switch", "MIN_MATCHED"]

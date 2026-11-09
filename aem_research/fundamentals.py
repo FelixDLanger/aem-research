@@ -248,7 +248,7 @@ def dei_shares_at(facts: pd.DataFrame, cutoffs) -> pd.DataFrame:
     cols = ["cik", "start_date", "shares_dei", "shares_dei_filed"]
     if facts is None or not len(facts) or "tag" not in facts.columns:
         return pd.DataFrame(columns=cols)
-    f = facts[facts["tag"].astype(str).isin(CLASS_SUMMED)]
+    f = facts[facts["tag"].isin(list(CLASS_SUMMED))]
     if f.empty:
         return pd.DataFrame(columns=cols)
     prep = prepare(f)
@@ -262,6 +262,33 @@ def dei_shares_at(facts: pd.DataFrame, cutoffs) -> pd.DataFrame:
     out = pd.concat(parts, ignore_index=True)
     out["start_date"] = pd.to_datetime(out["start_date"]).astype("datetime64[ns]")
     return out[cols]
+
+
+def dei_share_history(facts: pd.DataFrame) -> pd.DataFrame:
+    """(cik, asof, filed, shares): every cover-page share count on file, dated by the month
+    it was counted in (month-end; FSDS rounds dates to month-ends), the class counts summed
+    where a filing reports classes only, the latest filing kept per company and month.
+    The SEC price panel reads splits from it (a split changes the count by its ratio)."""
+    cols = ["cik", "asof", "filed", "shares"]
+    if facts is None or not len(facts) or "tag" not in facts.columns:
+        return pd.DataFrame(columns=cols)
+    f = facts[facts["tag"].isin(list(CLASS_SUMMED))][["cik", "ym", "value", "dim", "filed", "adsh"]]
+    f = f[pd.to_numeric(f["value"], errors="coerce") > 0]
+    if f.empty:
+        return pd.DataFrame(columns=cols)
+    f = f.assign(dim=f["dim"].astype(bool), filed=pd.to_datetime(f["filed"]).astype("datetime64[ns]"))
+    plain = (f[~f["dim"]].groupby(["cik", "adsh", "ym"], as_index=False)
+             .agg(shares=("value", "max"), filed=("filed", "max")))
+    dims = (f[f["dim"]].groupby(["cik", "adsh", "ym"], as_index=False)
+            .agg(shares=("value", "sum"), filed=("filed", "max")))
+    dims = dims.merge(plain[["cik", "adsh", "ym"]].assign(_p=True), on=["cik", "adsh", "ym"], how="left")
+    both = pd.concat([plain, dims[dims["_p"].isna()].drop(columns="_p")], ignore_index=True)
+    both["asof"] = _ym_to_ts(both["ym"]).to_numpy()
+    both = (both.sort_values(["cik", "asof", "filed"], kind="mergesort")
+            .drop_duplicates(["cik", "asof"], keep="last"))
+    both["cik"] = both["cik"].astype("int64")
+    both["shares"] = both["shares"].astype("float64")
+    return both[cols].reset_index(drop=True)
 
 
 def snapshots(facts: pd.DataFrame, subs: pd.DataFrame, cutoffs, *, current_months: int = 15,
