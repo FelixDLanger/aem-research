@@ -4,6 +4,7 @@ Base rates for extreme multiples in US small caps, and whether the AEM screening
 
 [Open notebook 01 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
 [Open notebook 02 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
+[Open notebook 03 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
 
 ## Design at a glance (pre-registration v0.3, draft)
 
@@ -44,8 +45,9 @@ Base rates for extreme multiples in US small caps, and whether the AEM screening
 | `aem_research/takeprivate.py` | Paper A: take-private deals, completion, terms from the merger documents, entry EBITDA and enterprise value, exit routes, public benchmark multiples |
 | `aem_research/data/wsib.py` | Washington State Investment Board's quarterly private equity table, fund by fund |
 | `notebooks/02_paper_a_take_private_sample.ipynb` | Colab notebook for Paper A's sample – counts and entry-side data only until Paper A's lock |
+| `aem_research/diagnostics.py`, `notebooks/03_universe_a_diagnostic.ipynb` | Universe funnel: windows passing each filter alone, so far and without it; the vendor universe's windows looked up in A; counts and ratios only |
 | `tests/` | Offline test suite on synthetic data in the SEC's published layouts – runs in the notebook before any data is touched |
-| `tools/` | `build_notebook.py` and `build_notebook_paper_a.py` generate the notebooks (edit cells there, not in the .ipynb); `e2e_synthetic.py` runs every cell of notebook 01 against a synthetic Drive in eight scenarios, including truncated downloads, a corrupt FRED file, a planted failing test, planted splits, companies SimFin never had (priced from SEC data alone) and an EODHD gap-fill; `e2e_paper_a.py` runs notebook 02 on top of it, and on an empty Drive |
+| `tools/` | `build_notebook.py`, `build_notebook_paper_a.py` and `build_notebook_diag.py` generate the notebooks (edit cells there, not in the .ipynb); `e2e_synthetic.py` runs every cell of notebook 01 against a synthetic Drive in eight scenarios, including truncated downloads, a corrupt FRED file, a planted failing test, planted splits, companies SimFin never had (priced from SEC data alone) and an EODHD gap-fill; `e2e_paper_a.py` runs notebook 02 on top of it, and on an empty Drive |
 
 ## Run it
 

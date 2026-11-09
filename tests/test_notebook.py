@@ -64,10 +64,28 @@ def test_paper_a_notebook_is_valid_and_compiles():
     assert "paper_a_LOCK.json" in text and "@" not in "".join("".join(c["source"]) for c in codes if "User-Agent" in "".join(c["source"]))
 
 
+NOTEBOOK_D = ROOT / "notebooks" / "03_universe_a_diagnostic.ipynb"
+
+
+def test_diagnostic_notebook_is_valid_and_reads_only():
+    nb = json.loads(NOTEBOOK_D.read_text(encoding="utf-8"))
+    assert nb["nbformat"] == 4 and nb["nbformat_minor"] >= 5
+    codes = [c for c in nb["cells"] if c["cell_type"] == "code"]
+    assert len(codes) >= 3
+    src = "\n".join("".join(c["source"]) for c in codes)
+    for i, cell in enumerate(codes):
+        assert cell["outputs"] == [] and cell["execution_count"] is None
+        assert not re.search(r"^\s*[!%]", "".join(cell["source"]), flags=re.M)
+        compile("".join(cell["source"]), f"cell-{i}", "exec")
+    # counts only: no outcome engine, no network clients, no writes to the feature caches
+    assert "outcomes" not in src and "SecClient" not in src and "save_table" not in src
+
+
 def test_notebooks_match_their_builders(tmp_path):
     import subprocess
     import sys
-    for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A)):
+    for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
+                        ("build_notebook_diag.py", NOTEBOOK_D)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
