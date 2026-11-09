@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from aem_research import restatements as rs
 from aem_research import secprices as sp
 from aem_research import splits
+from sec_fixtures import share_facts
 
 PERIODS = pd.date_range("2013-03-31", "2014-12-31", freq="QE")
 FILERS = range(900001, 900011)
@@ -19,7 +21,7 @@ def _company(cusip_of, price_of, shares_of, filers=FILERS, n_filers=20):
     return rows, hold
 
 
-def _build(companies, ftd_px=None, ftd_names=None, dei=None):
+def _build(companies, ftd_px=None, ftd_names=None, dei=None, restated=None):
     rows, hold, br = [], [], []
     for cik, (r, h, cus) in companies.items():
         rows += r
@@ -29,7 +31,8 @@ def _build(companies, ftd_px=None, ftd_names=None, dei=None):
     holders = pd.DataFrame(hold, columns=["cusip", "period", "filer_cik", "shares"])
     bridge = pd.DataFrame(br, columns=["cusip", "cik", "method"]).drop_duplicates("cusip")
     mains = sp.main_cusips(f13, bridge)
-    return sp.build_panel(mains, holders, ftd_px, bridge, as_of_period=PERIODS[-1], ftd_names=ftd_names, dei=dei)
+    return sp.build_panel(mains, holders, ftd_px, bridge, as_of_period=PERIODS[-1], ftd_names=ftd_names, dei=dei,
+                          restated=restated)
 
 
 def _px(points):
@@ -309,3 +312,147 @@ def test_validation_uses_the_filings_as_a_third_opinion():
                                          "ticker": "CIK6", "prev_period": q[2], "period": q[3], "evidence": "",
                                          "cusip_change": False}]))
     assert len(lines) == 1 and lines[0].startswith("split missed · cik 6 · 2015-09 to 2015-12")
+
+
+FILING_QUARTERS = pd.date_range("2012-03-31", "2015-12-31", freq="QE")
+SPLIT_DAY = pd.Timestamp("2014-02-20")                                  # between PERIODS[3] and PERIODS[4]
+
+
+def _restated(*companies):
+    """(events, spans) of the restated history: companies as (cik, ratio or None, issue or None)."""
+    facts = pd.concat([share_facts(c, FILING_QUARTERS, splits=[(SPLIT_DAY, r)] if r else (), issue=iss)
+                       for c, r, iss in companies], ignore_index=True)
+    ev, spans, _info = rs.evidence(facts)
+    return ev, spans
+
+
+BLUR = [1, 1, 1, 1, 0.7, 0.8, 1.25, 1.4, 0.75, 1.3]                    # four holders agree, six traded
+
+
+def test_restated_history_sets_the_ratio_where_prices_and_counts_both_shrink_it():
+    # 1-for-10 at a CUSIP change; the stock halves within weeks and the company doubles its share
+    # count, so the switch of daily prices and the counts both say 1-for-5
+    old, new = "NNN000020", "OOO000020"
+    c = _company(lambda k: old if k < 4 else new, lambda k: (1.0 - 0.05 * k) * (5 if k >= 4 else 1),
+                 lambda k, j: 1, filers=NOBODY)
+    px = _px([(old, "2014-02-14", 0.82), (new, "2014-03-10", 4.1)])
+    dei = _dei(20, 5e7, 1e7)
+    _p, ev0, _i = _build({20: (*c, [old, new])}, ftd_px=px, dei=dei)
+    s0 = ev0[ev0["kind"] == "split"]
+    assert len(s0) == 1 and s0.iloc[0]["ratio"] == pytest.approx(0.2) and s0.iloc[0]["evidence"] == "CUSIP change + filings"
+    doubled = lambda d: 5e7 * (2.0 if pd.Timestamp(d) >= pd.Timestamp("2014-03-15") else 1.0)  # noqa: E731
+    panel, ev, info = _build({20: (*c, [old, new])}, ftd_px=px, dei=dei, restated=_restated((20, 0.1, doubled)))
+    s1 = ev[ev["kind"] == "split"]
+    assert len(s1) == 1 and s1.iloc[0]["ratio"] == pytest.approx(0.1)
+    assert s1.iloc[0]["evidence"] == "CUSIP change + restated" and info["splits_restated"] == 1
+    p = panel.set_index("period")["price"]
+    assert p[PERIODS[4]] / p[PERIODS[3]] == pytest.approx(4.0 / 8.5)       # the halving stays, no fake gain
+
+
+def test_restated_history_and_the_holders_median_catch_a_reverse_split_the_holders_test_misses():
+    c = _company(lambda k: "PPP000021", lambda k: (1.0 - 0.05 * k) * (10 if k >= 4 else 1),
+                 lambda k, j: (5000 + 7 * j) * (0.1 * BLUR[j] if k >= 4 else 1))
+    _p, ev0, info0 = _build({21: (*c, ["PPP000021"])})
+    s0 = ev0[ev0["kind"] == "split"]
+    assert info0["splits_holders"] == 0 and len(s0) == 1                   # the agreement share is 40%
+    assert s0.iloc[0]["evidence"] == "holders (median)" and s0.iloc[0]["ratio"] == pytest.approx(0.1)
+    panel, ev, info = _build({21: (*c, ["PPP000021"])}, restated=_restated((21, 0.1, None)))
+    s1 = ev[ev["kind"] == "split"]
+    assert len(s1) == 1 and s1.iloc[0]["evidence"] == "restated" and s1.iloc[0]["ratio"] == pytest.approx(0.1)
+    assert panel["price"].round(3).tolist() == [10.0, 9.5, 9.0, 8.5, 8.0, 7.5, 7.0, 6.5]
+
+
+def test_a_stock_dividend_is_placed_by_the_holders_median():
+    price = lambda k: 20.0 * 1.02 ** k / (1.25 if k >= 4 else 1)          # noqa: E731
+    noise = [1, 1, 1, 1, 0.85, 0.9, 1.1, 1.15, 0.88, 1.12]
+    c = _company(lambda k: "QQQ000022", price, lambda k, j: (2000 + 3 * j) * (1.25 * noise[j] if k >= 4 else 1))
+    _p, ev0, _i = _build({22: (*c, ["QQQ000022"])})
+    assert (ev0["kind"] == "split").sum() == 0                              # holders alone: 40% agree, no split
+    panel, ev, info = _build({22: (*c, ["QQQ000022"])}, restated=_restated((22, 1.25, None)))
+    s1 = ev[ev["kind"] == "split"]
+    assert len(s1) == 1 and s1.iloc[0]["period"] == PERIODS[4] and s1.iloc[0]["ratio"] == pytest.approx(1.25)
+    assert info["restated_applied"] == 1 and info["restated_unplaced"] == 0
+    assert panel["price"].pct_change().dropna().round(4).eq(0.02).all()     # a steady 2% a quarter
+
+
+def test_restated_history_without_a_split_overrules_the_holders():
+    c = _company(lambda k: "RRR000023", lambda k: (10 + k) if k < 4 else (10 + k) / 2,
+                 lambda k, j: (1000 + 10 * j) * (2 if k >= 4 else 1))
+    _p, ev0, _i = _build({23: (*c, ["RRR000023"])})
+    assert (ev0["evidence"] == "holders").sum() == 1
+    _p, ev, info = _build({23: (*c, ["RRR000023"])}, restated=_restated((23, None, None)))
+    assert (ev["kind"] == "split").sum() == 0 and info["holder_splits_refuted_restated"] == 1
+
+
+def test_a_jump_with_the_count_collapsed_is_neutralized_and_one_the_filings_restate_nothing_for_is_real():
+    jump = _company(lambda k: "SSS000024", lambda k: 0.255 if k < 4 else 1.66, lambda k, j: 1, filers=NOBODY)
+    panel, ev, info = _build({24: (*jump, ["SSS000024"])}, dei=_dei(24, 5e7, 5.35e5))
+    s = ev[ev["kind"] == "split"]
+    assert len(s) == 1 and s.iloc[0]["evidence"] == "unresolved jump" and info["splits_neutralized"] == 1
+    p = panel.set_index("period")["price"]
+    assert p[PERIODS[4]] / p[PERIODS[3]] == pytest.approx(1.66 / 0.255 / 7)   # undone: about flat, never 6.5x
+    _p, _e, info0 = _build({24: (*jump, ["SSS000024"])})
+    assert info0["unexplained_jumps"] == 1 and info0["splits_neutralized"] == 0   # no evidence of a split: left
+    # a real tripling; the holders' median halves (profit taking, 40% agree)
+    real = _company(lambda k: "TTT000025", lambda k: 10.0 if k < 4 else 30.0,
+                    lambda k, j: (3000 + j) * (0.5 * BLUR[j] if k >= 4 else 1))
+    _p, ev1, _i = _build({25: (*real, ["TTT000025"])})
+    assert ev1.iloc[0]["evidence"] == "holders (median)"                    # without the history: read as 1-for-2
+    panel2, ev2, info2 = _build({25: (*real, ["TTT000025"])}, restated=_restated((25, None, None)))
+    assert (ev2["kind"] == "split").sum() == 0 and info2["jumps_restated_no_split"] == 1
+    assert panel2.set_index("period")["price"][PERIODS[4]] == 30.0
+
+
+def test_validation_with_the_restated_history():
+    q = pd.date_range("2015-03-31", "2016-06-30", freq="QE")
+    days = pd.bdate_range("2015-03-02", "2016-07-15")
+
+    def series(cik, adj, raw):
+        return pd.DataFrame({"ticker": f"CIK{cik}", "cik": cik, "period": q, "date": q + pd.Timedelta(days=1),
+                             "price": adj, "close_raw": raw, "cusip": "C%08d" % cik, "n_filers": 12,
+                             "price_source": "13F", "source": "sec"})
+
+    panel = pd.concat([
+        series(5, [5, 5.5, 6, 6.5, 7, 7.5], [10, 11, 12, 6.5, 7, 7.5]),           # 2:1 split, found by holders
+        series(6, [10, 10, 10, 6.6, 6.6, 6.6], [10, 10, 10, 6.6, 6.6, 6.6]),      # a spin-off: no split
+        series(8, [5, 5, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10]),              # a split the vendor lacks
+        series(9, [1, 1, 1, 0.93, 0.93, 0.93], [1, 1, 1, 6.5, 6.5, 6.5]),         # a neutralized jump
+    ], ignore_index=True)
+    ev = pd.DataFrame({"cik": [5, 8, 9], "period": [q[3], q[2], q[3]], "kind": "split", "ratio": [2.0, 2.0, 1 / 7],
+                       "evidence": ["holders", "CUSIP change", "unresolved jump"]})
+    vend = {5: [5, 5.5, 6, 6.5, 7, 7.5], 6: [6.6] * 6, 8: [10] * 6, 9: [10, 10, 10, 6.5, 6.5, 6.5]}
+    vendor = pd.concat([pd.DataFrame({"ticker": f"V{c}", "date": days, "price": np.interp(days.asi8, q.asi8, p)})
+                        for c, p in vend.items()], ignore_index=True)
+    keys = pd.concat([pd.DataFrame({"ticker": f"V{c}", "start_date": q + pd.Timedelta(days=1), "cik": c})
+                      for c in vend], ignore_index=True)
+    fq = pd.date_range("2014-03-31", "2017-03-31", freq="QE")
+    facts = pd.concat([share_facts(5, fq, splits=[(pd.Timestamp("2015-11-15"), 2.0)]), share_facts(6, fq),
+                       share_facts(8, fq, splits=[(pd.Timestamp("2015-08-15"), 2.0)]),
+                       share_facts(9, fq, splits=[(pd.Timestamp("2015-11-15"), 0.1)])], ignore_index=True)
+    restated = rs.evidence(facts)[:2]
+    plain = sp.validate(panel, ev, vendor, keys)
+    assert plain["vendor_splits"] == 3 and plain["found_splits"] == 2 and plain["split_precision"] == 0.5
+    out, cases = sp.validate(panel, ev, vendor, keys, restated=restated, return_cases=True)
+    # the spin-off is no split; company 9's vendor shows the 1-for-10 the panel only neutralized
+    assert out["vendor_splits"] == 2 and out["vendor_moves_restated_none"] == 1
+    assert out["found_splits"] == 2 and out["split_precision"] == 1.0 and out["found_restated_confirms"] == 2
+    assert out["split_precision_vendor"] == 0.5 and out["neutralized"] == 1 and out["neutralized_vendor_reverse"] == 1.0
+    assert out["split_recall"] == 0.5 and out["missed_restated_known"] == 1.0 and out["restated_known"] == 1.0
+    assert set(cases["category"]) == {"jump neutralized"} and out["neutralized_within_2x"] == 1.0
+    line = sp.case_lines(cases[cases["category"] == "jump neutralized"])[0]
+    assert "restated ratio 0.1 ·" in line and "found 0.143 (unresolved jump)" in line
+
+
+def test_a_restated_split_placed_in_a_fails_quarter_moves_to_the_holders_quarter():
+    # 13F has no price for 2014-03-31 (fails-to-deliver fills it); the holders date the 1-for-10
+    # split between 2013-12-31 and 2014-06-30, the restated history only to a window around March
+    price = lambda k: (1.0 - 0.05 * k) * (10 if k >= 4 else 1)          # noqa: E731
+    rows, hold = _company(lambda k: "UUU000026", price, lambda k, j: (5000 + 7 * j) * (0.1 if k >= 4 else 1))
+    rows = [r for r in rows if r[1] != PERIODS[4]]
+    hold = [h for h in hold if h[1] != PERIODS[4]]
+    px = _px([("UUU000026", "2014-03-28", 8.0)])
+    panel, ev, info = _build({26: (rows, hold, ["UUU000026"])}, ftd_px=px, restated=_restated((26, 0.1, None)))
+    s = ev[ev["kind"] == "split"]
+    assert len(s) == 1 and s.iloc[0]["evidence"] == "holders" and s.iloc[0]["period"] == PERIODS[5]
+    assert info["restated_moved"] == 1 and info["restated_applied"] == 0 and info["fails_dropped_at_split"] == 1
+    assert panel["price"].round(3).tolist() == [10.0, 9.5, 9.0, 8.5, 7.5, 7.0, 6.5]

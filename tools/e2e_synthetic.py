@@ -431,8 +431,10 @@ elif FULL:
 if FULL:
     import re
     assert "SEC PANEL " in summary_text and "basis SEC panel (A)" in summary_text, "the SEC price panel is not primary"
-    n_split = int(re.search(r"SPLITS    from_holders (\d+)", summary_text).group(1))
-    assert n_split >= 4, f"splits from holders: {n_split} (5 planted)"
+    m_split = re.search(r"SPLITS    from_restated (\d+) · from_holders (\d+)", summary_text)
+    n_split = int(m_split.group(1)) + int(m_split.group(2))
+    assert n_split >= 4, f"splits from the restated history and holders: {n_split} (5 planted)"
+    assert "RESTATED  observations" in summary_text, "the restated history is missing"
     assert "split_precision 100.0% ok" in summary_text and "split_recall 100.0% ok" in summary_text, "split check"
     assert "ROBUST B  " in summary_text and "CALIB" in summary_text
 if SCENARIO == "eodhd":

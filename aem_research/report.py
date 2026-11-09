@@ -42,7 +42,8 @@ def paste_block(report: dict) -> str:
                      f" · attention signal {f.get('attention_signal')}"
                      + (f" · basis {f['price_basis']}" if f.get("price_basis") else ""))
     for key, label in (("coverage_summary", "COVERAGE "), ("prelock", "PRE-LOCK  "), ("sec_prices", "SEC PANEL "),
-                       ("splits", "SPLITS    "), ("sec_check", "SEC CHECK "), ("liquidity", "LIQUIDITY "),
+                       ("splits", "SPLITS    "), ("restated", "RESTATED  "), ("sec_check", "SEC CHECK "),
+                       ("liquidity", "LIQUIDITY "),
                        ("funnel_a", "FUNNEL A  "), ("a_vs_v", "A VS V    "), ("universe_b", "ROBUST B  "),
                        ("calibration", "CALIB     "), ("delistings", "DELISTED  "),
                        ("price_basis", "PRICES    "), ("holes", "HOLES     "), ("regime_summary", "REGIME    "),

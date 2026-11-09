@@ -448,16 +448,16 @@ else:
 md("""
 ## Phase F – SEC price panel (the primary price basis, D10)
 
-Every price the primary analysis uses comes from SEC filings, so the companies that later delisted are priced exactly like the survivors and the published numbers rest on public data. Each company gets one quarter-end price per quarter: the median of market value over shares held across the 13F filers of its main CUSIP (at least three), else the fails-to-deliver close nearest the quarter-end. Splits are found from the holders' share counts (a split multiplies every holder's shares by the same ratio) and from CUSIP changes, and prices are restated in the units after the last split. Counts only – no returns.
+Every price the primary analysis uses comes from SEC filings, so the companies that later delisted are priced exactly like the survivors and the published numbers rest on public data. Each company gets one quarter-end price per quarter: the median of market value over shares held across the 13F filers of its main CUSIP (at least three), else the fails-to-deliver close nearest the quarter-end. Splits are found from the filings' restated history (after a split, every later 10-Q and 10-K restates past share counts by exactly the split ratio), from the holders' share counts (a split multiplies every holder's shares by the same ratio) and from CUSIP changes, and prices are restated in the units after the last split. A jump up whose reverse split is certain but whose ratio nothing gives is neutralized, so it cannot count as a gain. Counts only – no returns.
 """)
 
 phase("F SEC prices", before="""
 # ── Phase F · SEC price panel: 13F quarter-end prices, fails-to-deliver files, splits ──
-from aem_research import fundamentals as fu, secprices
+from aem_research import fundamentals as fu, restatements, secprices
 from aem_research.data import ftd
 
 SEC_PANEL, SEC_EVENTS, SEC_BRIDGE, SEC_AS_OF, FTD_PX, SEC_INFO = None, None, None, None, None, {}
-SEC_FILINGS = None
+SEC_FILINGS = SEC_RESTATED = None
 """, body="""
 if f13_breadth is None or not len(f13_breadth) or "price_13f" not in f13_breadth.columns:
     print("No 13F prices on Drive – the SEC panel (option A) is skipped; the vendor panel stands in.")
@@ -481,10 +481,21 @@ elif SEC_BRIDGE is not None:
     # each filing's share count (cover page, else weighted average): split evidence where holders
     # are too few or a CUSIP changed
     SEC_FILINGS = fu.filing_share_history(facts) if facts is not None and len(facts) else None
+    # the restated history: the same period's share count as first reported and as later filings
+    # report it again differs by exactly the splits in between (aem_research.restatements)
+    if facts is not None and len(facts):
+        rst_events, rst_spans, rst_info = restatements.evidence(facts, subs)
+        SEC_RESTATED = (rst_events, rst_spans)
+        save_table(rst_events, paths.cache / "sec_restated_splits")
+        REPORT["restated"] = rst_info
+        print(f"Restated history: {rst_info['observations']:,} pairs of reports ({rst_info['obs_same']:,} no split, "
+              f"{rst_info['obs_split']:,} a split, {rst_info['obs_other']:,} neither) · {rst_info['events']:,} splits "
+              f"at {rst_info['companies_with_events']:,} companies ({rst_info['events_two_periods']:,} seen in two or "
+              f"more periods)")
     SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
                                                             ftd_names=FTD_NAMES,
                                                             max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200),
-                                                            dei=SEC_FILINGS)
+                                                            dei=SEC_FILINGS, restated=SEC_RESTATED)
     del holders, mains
     SEC_AS_OF = secprices.as_of_date(as_of_q)
     save_table(SEC_PANEL, paths.cache / "sec_panel")
@@ -492,17 +503,30 @@ elif SEC_BRIDGE is not None:
     print(f"SEC panel: {SEC_INFO['companies']:,} companies, {SEC_INFO['series']:,} series, as of {SEC_AS_OF.date()} · "
           f"quarters from 13F {SEC_INFO['quarters_13f']:,}, from fails files {SEC_INFO['quarters_fails']:,}, "
           f"final prices {SEC_INFO['final_prices']:,}")
-    print(f"Splits: {SEC_INFO['splits_holders']:,} from holders, {SEC_INFO['splits_cusip']:,} at CUSIP changes, "
-          f"{SEC_INFO['splits_filings']:,} from filings, {SEC_INFO['splits_few_holders']:,} from one or two holders · "
-          f"new series {SEC_INFO['new_series']:,} · one-quarter price errors {SEC_INFO['spikes_replaced']:,} replaced, "
+    print(f"Splits: {SEC_INFO['splits_restated']:,} from the restated history, {SEC_INFO['splits_holders']:,} from "
+          f"holders, {SEC_INFO['splits_cusip']:,} at other CUSIP changes, {SEC_INFO['splits_filings']:,} from filing "
+          f"counts, {SEC_INFO['splits_few_holders']:,} from one or two holders, {SEC_INFO['splits_holders_median']:,} "
+          f"from the holders' median · {SEC_INFO['splits_neutralized']:,} jumps neutralized · new series "
+          f"{SEC_INFO['new_series']:,} · one-quarter price errors {SEC_INFO['spikes_replaced']:,} replaced, "
           f"{SEC_INFO['spikes_dropped']:,} left out · large moves without evidence {SEC_INFO['unexplained_jumps']:,}")
     REPORT["sec_prices"] = {"companies": SEC_INFO["companies"], "series": SEC_INFO["series"],
                             "as_of": str(SEC_AS_OF.date()), "quarters_13f": SEC_INFO["quarters_13f"],
                             "quarters_fails": SEC_INFO["quarters_fails"], "final_prices": SEC_INFO["final_prices"],
                             "bridge": SEC_BRIDGE["method"].value_counts().to_dict()}
-    REPORT["splits"] = {"from_holders": SEC_INFO["splits_holders"], "at_cusip_changes": SEC_INFO["splits_cusip"],
-                        "from_filings": SEC_INFO["splits_filings"], "from_few_holders": SEC_INFO["splits_few_holders"],
+    REPORT["splits"] = {"from_restated": SEC_INFO["splits_restated"], "from_holders": SEC_INFO["splits_holders"],
+                        "at_cusip_changes": SEC_INFO["splits_cusip"], "from_filings": SEC_INFO["splits_filings"],
+                        "from_few_holders": SEC_INFO["splits_few_holders"],
+                        "from_holders_median": SEC_INFO["splits_holders_median"],
+                        "neutralized": SEC_INFO["splits_neutralized"],
                         "holder_splits_rejected": SEC_INFO["holder_splits_rejected"],
+                        "refuted_by_restated": f"holders {SEC_INFO['holder_splits_refuted_restated']}, "
+                                               f"CUSIP changes {SEC_INFO['cusip_splits_refuted_restated']}, "
+                                               f"jumps {SEC_INFO['jumps_restated_no_split']}",
+                        "restated_moved": SEC_INFO["restated_moved"],
+                        "duplicates_skipped": SEC_INFO["split_duplicates_skipped"],
+                        "restated_used": f"{SEC_INFO['restated_applied']} applied, {SEC_INFO['restated_matched']} matched, "
+                                         f"{SEC_INFO['restated_unplaced']} unplaced of {SEC_INFO['restated_events']}",
+                        "holders_restated_disagree": SEC_INFO["holders_restated_disagree"],
                         "new_series": SEC_INFO["new_series"], "spikes_replaced": SEC_INFO["spikes_replaced"],
                         "spikes_dropped": SEC_INFO["spikes_dropped"], "unexplained_jumps": SEC_INFO["unexplained_jumps"]}
 """, after="""
@@ -650,7 +674,7 @@ else:
               f"at A's first date)")
         # ---- checks on the SEC panel, before the lock and without outcomes ----
         SEC_CHECK, SPLIT_CASES = secprices.validate(SEC_PANEL, SEC_EVENTS, panel, keys, filings=SEC_FILINGS,
-                                                    return_cases=True)
+                                                    restated=SEC_RESTATED, return_cases=True)
         REPORT["split_cases"] = secprices.case_lines(SPLIT_CASES, per_category=4)
         if len(SPLIT_CASES):
             print("Split check – cases to look at (counts and prices only):")

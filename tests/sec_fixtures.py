@@ -101,3 +101,37 @@ class FakeClient:
     def get(self, url: str):
         self.requests.append(url)
         return self.files.get(url)
+
+
+def share_facts(cik, quarters, splits=(), issue=None, rounding=None, bs=True):
+    """XBRL share facts (the layout aem_research.data.fsds.load returns) of quarterly 10-Qs and
+    10-Ks filed 40 days after each quarter-end (60 for the 10-K): the weighted-average diluted
+    shares of the quarter (the year for a 10-K) and of the same period a year earlier; with
+    `bs`, the balance-sheet count at the quarter-end and at the prior fiscal year-end. Every
+    count is restated for the splits ((date, ratio), ...) before the filing date, as filers
+    do. `issue(d)` is the count at date d in the first units; `rounding` rounds every value."""
+    import numpy as np
+    import pandas as pd
+
+    def ym(ts):
+        ts = pd.Timestamp(ts)
+        return ts.year * 12 + ts.month - 1
+
+    issue = issue or (lambda d: 1e7 * (1.0 + 0.01 * (pd.Timestamp(d).year - 2010)))
+    rows = []
+    for k, P in enumerate(pd.DatetimeIndex(quarters)):
+        tenk = P.month == 12
+        filed = P + pd.Timedelta(days=60 if tenk else 40)
+        units = float(np.prod([r for d, r in splits if pd.Timestamp(d) <= filed])) if splits else 1.0
+        adsh = f"{cik:010d}-{filed:%y}-{k:06d}"
+        for d in (P, P - pd.DateOffset(years=1) + pd.offsets.MonthEnd(0)):
+            rows.append((cik, "WeightedAverageNumberOfDilutedSharesOutstanding", ym(d), 4 if tenk else 1,
+                         issue(d) * units, filed, adsh))
+        if bs:
+            for d in (P, pd.Timestamp(year=P.year - 1, month=12, day=31)):
+                rows.append((cik, "CommonStockSharesOutstanding", ym(d), 0, issue(d) * units, filed, adsh))
+    f = pd.DataFrame(rows, columns=["cik", "tag", "ym", "qtrs", "value", "filed", "adsh"])
+    if rounding:
+        f["value"] = (f["value"] / rounding).round() * rounding
+    return f.assign(tag=f["tag"].astype("category"), dim=False, ym=f["ym"].astype("int32"),
+                    qtrs=f["qtrs"].astype("int16"))

@@ -15,10 +15,14 @@ public evidence find splits without a vendor:
     be matched (before 13F data begin in 2013), the last daily price under the old
     CUSIP and the first under the new one, at most 30 days apart, give the ratio
     (within 6% of a standard ratio).
-  * the filings – the cover-page share count (dei:EntityCommonStockSharesOutstanding)
-    changes by the split ratio. aem_research.secprices uses it to confirm or refute a
-    ratio read from prices at a CUSIP change, and to find splits where holders are too
-    few, when the price moved the other way by about as much.
+  * the filings – a filing's share count (cover page, balance sheet or weighted average)
+    changes by the split ratio, blurred by any shares issued in between.
+    aem_research.secprices uses it to confirm or refute a ratio read from prices at a
+    CUSIP change, and to find splits where holders are too few, when the price moved the
+    other way by about as much.
+  * the filings' restated history (aem_research.restatements) – the same period's count,
+    as first reported and as a later filing reports it again, differs by exactly the
+    splits in between: the most exact evidence, used first where it speaks.
 
 A ratio r means one old share became r new shares (2 for a 2-for-1 split, 0.1 for a
 1-for-10 reverse split): prices before the split are divided by r to match later ones.

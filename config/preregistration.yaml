@@ -115,7 +115,8 @@ decisions:
       a small subset; universe A now measures it directly – the A VS V line.) So every
       price the primary analysis uses now comes from SEC filings (price_basis): quarter-end
       prices from Form 13F, the SEC fails-to-deliver files where 13F has none, and splits
-      found from the holders' share counts and CUSIP changes. Entry, the size and price
+      found from the filings' restated history, the holders' share counts and CUSIP changes
+      (restated history added Nov 9). Entry, the size and price
       filters, the 3-year drawdown and the outcomes use these prices for every company
       alike, so the companies added back – the ones that later vanished – are measured
       exactly like the survivors, and the published numbers rest on public data only. A
@@ -345,36 +346,75 @@ price_basis:
     price). Quarter-end prices are dated the day after the quarter-end, the start date
     they serve; the close was public on its day, 13F only measures it later.
   splits: >-
-    A split multiplies every holder's share count by the same ratio. Between consecutive
-    quarter-ends the ten largest 13F holders of the main CUSIP present in both are
-    matched; a split is recorded when at least three are matched, their median share
-    ratio is within 3% of a standard ratio (those companies use: 6:5 to 100:1 forward,
-    1:2 to 1:1000 reverse), at least half of them are within 5% of it, the ratio is
-    at least 1.2 or at most 1/1.2, the price moved with it (the split-adjusted
+    Evidence, strongest first (restated history, holders' median and neutralized jumps
+    amended Nov 9, 2026, after the split check's cases showed reverse splits read at half
+    their ratio and one missed outright).
+    (1) The filings' restated history. After a split, every later 10-Q and 10-K restates
+    earlier periods' share counts by the split ratio (ASC 260-10-55-12 for the
+    weighted-average shares behind earnings per share; the balance sheet's and equity
+    statement's counts with them), so the same period's count as first reported and as
+    reported again differs by exactly the splits between the two filing dates – share
+    issuance and the stock price do not enter. From consecutive reports of the same fact
+    (weighted-average and balance-sheet shares; amendments left out), a ratio within 1%
+    of 1 shows no split between the two filing dates, and one within 1% of a standard
+    ratio of at least 1.2 either way (plus the reported values' rounding, at most 2%
+    each) shows a split of that ratio. Reports of one split merge into an event whose
+    window is the intersection of theirs, opened 10 days before the earlier filing and
+    closed 20 days after the later one. Each event is placed at one pair of quarter-ends
+    inside its window where the split-adjusted move stays within 1/6 to 6 times: where
+    the holders' test (2) shows about its ratio, else (reverse splits) at a CUSIP change
+    the price moved the other way at, else where the median of three or more matched holders lies nearer
+    the ratio than 1, else where the price moved the other way by most of it – never
+    where three or more holders' median lies nearer 1. It is used at a CUSIP change, at a
+    move of 2.5 times or more, where the holders placed it, or (reverse splits) where two
+    or more periods were restated; a forward split needs the holders, or two periods and
+    a CUSIP change or such a move – a forward split read wrongly invents a gain. One
+    placed in a quarter the fails-to-deliver files price moves to the quarter the
+    holders' test dates it to, and a second split of about its ratio next to it is not
+    applied. Where the restated history shows no split across a quarter, it overrules a
+    holders' split, a price switch at a CUSIP change and every rule for a large move,
+    which is then a real move.
+    (2) Holders. A split multiplies every holder's share count by the same ratio. Between
+    consecutive quarter-ends the ten largest 13F holders of the main CUSIP present in
+    both are matched; a split is recorded when at least three are matched, their median
+    share ratio is within 3% of a standard ratio (those companies use: 6:5 to 100:1
+    forward, 1:2 to 1:1000 reverse), at least half of them are within 5% of it, the
+    ratio is at least 1.2 or at most 1/1.2, the price moved with it (the split-adjusted
     quarterly move within 1/6 to 6 times; a share-class flip moves no price), and the
-    filings' share count (below) did not stay put (within 15%) or move the other way.
+    filings' share count (below) did not stay put (within 15%) or move the other way
+    (unless the restated history shows the same ratio there).
     Fails-to-deliver prices between two 13F quarters that straddle a split are dropped.
-    At a change of main CUSIP without holder evidence, the last daily price under the
-    old CUSIP over the first under the new one (at most 30 days apart) gives the ratio
-    (within 6% of a standard ratio); the filings' share counts must agree within 35% –
-    each filing's cover-page count where the SEC data sets carry it, else the
-    weighted-average shares of its own latest period, which filers restate for every
-    split before the filing date, so the last filing on or before the earlier
-    quarter-end and the first after the later one differ by the split ratio. Without
+    (3) CUSIP changes. At a change of main CUSIP without the evidence above, the median
+    share ratio of three or more matched holders within 8% of a common reverse ratio sets
+    the ratio when the price moved the other way by about as much (split-adjusted move
+    within 1/2.5 to 2.5 times): unlike two days' prices it does not drift with the stock,
+    and unlike a share count it does not move with issuance. Else the last daily price
+    under the old CUSIP over the first under the new one (at most 30 days apart) gives
+    the ratio (within 6% of a standard ratio); the filings' share counts must agree
+    within 35% – each filing's cover-page count where the SEC data sets carry it, else
+    its balance-sheet count, else the weighted-average shares of its own latest period,
+    so the last filing on or before the earlier quarter-end and the first after the
+    later one differ by the split ratio and by any shares issued in between. Without
     filings the ratio must be a common one (2:1 to 10:1 forward, 1:2 to 1:100 reverse;
-    the full standard set is so dense below 1:10 that any price ratio lands near one
-    of its members). Where neither prices nor holders decide at a CUSIP change, the
-    filings alone record a split when their share ratio is within 8% of a standard
-    ratio of at least 2:1 either way and the price moved the other way by about as much
-    (split-adjusted move within 1/2.5 to 2.5 times). Any quarter-to-quarter move of 2.5
-    times or more is checked against one or two matched holders within 3% of a standard
-    ratio (with the filings agreeing, or both of two holders) and against the filings
-    alone (reverse splits only: share issuance can double a count while the price
-    halves, but nothing ordinary halves it while the price doubles), and counted when
-    nothing explains it. A one-quarter price error (at least 4 times away from both
-    neighbouring quarter-ends, which agree within 50%) is replaced by the
-    fails-to-deliver close of that quarter-end when it fits the neighbours, else left
-    out.
+    the full standard set is so dense below 1:10 that any price ratio lands near one of
+    its members). Where neither prices nor holders decide at a CUSIP change, the filings
+    alone record a split when their share ratio is within 8% of a standard ratio of at
+    least 2:1 either way and the price moved the other way by about as much
+    (split-adjusted move within 1/2.5 to 2.5 times).
+    (4) Large moves. Any quarter-to-quarter move of 2.5 times or more is checked against
+    one or two matched holders within 3% of a standard ratio (with the filings agreeing,
+    or both of two holders), then – moves up only – the median of three or more matched
+    holders within 8% of a common reverse ratio (unless the filings' count stayed within
+    15%), then the filings alone (reverse splits only: share issuance can double a count
+    while the price halves, but nothing ordinary halves it while the price doubles), and
+    is counted when nothing explains it. A move up with the share count at least halved
+    (in the filings, or in three or more holders' median) holds a reverse split whose
+    ratio nothing gives: it is neutralized by the standard ratio that undoes the move
+    (evidence 'unresolved jump'), so it can hide a move but never invent a gain. Moves
+    down are left as they are: a missed forward split can only hide a gain.
+    (5) A one-quarter price error (at least 4 times away from both neighbouring
+    quarter-ends, which agree within 50%) is replaced by the fails-to-deliver close of
+    that quarter-end when it fits the neighbours, else left out.
   new_series: >-
     A change of main CUSIP that holders show to be the same security (median ratio within
     15% of 1) or prices show to be the same (within 25%) continues the series; one that is
@@ -419,9 +459,15 @@ price_basis:
     (a gap the next quarter undoes) excluded as price errors, and – where the filings'
     share counts are known – the count must have moved with it (moved at least 15%, the
     same way, within 1.5 times of the ratio): vendors adjust their prices for spin-offs
-    and special dividends too, which leave the share count alone. Recall: those splits
-    found with the vendor's ratio (within 10%); precision: splits found that the vendor's
-    prices or (unless they were the evidence) the filings' counts moved by. Also counted:
+    and special dividends too, which leave the share count alone. Where the restated
+    history speaks (price_basis.splits (1); amended Nov 9, 2026), it decides instead: the
+    vendor's move is a split when the restated history shows a split of its ratio (within
+    5%) across the quarter, and none when it shows no split. Recall: those splits found
+    with the vendor's ratio (within 10%); precision: splits found that the vendor's prices
+    or – unless they were the evidence – the restated history (within 10%) or the
+    filings' counts moved by. Neutralized jumps claim no ratio: they are counted on their
+    own (how many, how often the vendor shows a reverse split there) and stay out of
+    precision; where the vendor shows a split there, recall counts them as missed. Also counted:
     quarters where the SEC return is at least twice or at most half the vendor's, the
     2x gaps nothing explains, and sample cases of each kind (SPLIT CASE lines; the
     Split check sheet lists all). Thresholds in review_before_lock.
@@ -605,6 +651,7 @@ estimation:
     - multiples in real terms (the touch threshold rises with CPI from entry)
     - insider-sale placebo for H2 (see H2 placebo)
     - B, the daily vendor closes with the SEC fill (D10, price_basis.robustness_b)
+    - without the windows that cross a neutralized jump or a split resting only on the holders' median, one or two holders, or the filings' share counts (price_basis.splits; added Nov 9, 2026)
     - H2 on start dates from 2016 only, where the 3-year drawdown rests on 13F quarter-ends throughout
     - likelihood-ratio intervals with start years resampled as well as firms, because shocks such as 2020-2021 hit many firms at once
   descriptives:
