@@ -155,15 +155,18 @@ def _marker(cache_dir: Path, prefix: str, label: str) -> Path:
 def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: str,
             extract: Callable[[zipfile.ZipFile], dict[str, pd.DataFrame]], *,
             client=None, offline: bool = False, log=print,
-            local_dir: str | Path | None = None, schema: str | None = None) -> tuple[dict[str, pd.DataFrame], dict]:
+            local_dir: str | Path | None = None, schema: str | None = None,
+            skip_load: Iterable[str] = ()) -> tuple[dict[str, pd.DataFrame], dict]:
     """Run `extract` over every file, caching each file's tables on Drive.
 
     `local_dir` can hold zips downloaded by hand (same file names as on the SEC site);
     they are used before the network. Returns ({table name: all files concatenated},
     stats). A file the SEC does not have (404) is counted as missing and retried on
     the next run. With `schema`, a cached file extracted under a different schema (an
-    older tag list, say) is extracted again rather than reused.
+    older tag list, say) is extracted again rather than reused. Tables named in
+    `skip_load` are cached but not loaded (read them later with `cached_table`, filtered).
     """
+    skip = set(skip_load)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     tables: dict[str, list[pd.DataFrame]] = {}
@@ -180,8 +183,10 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
                 if log:
                     log(f"  {prefix} {label}: cached under an older schema – extracting again")
         if mark.exists() and names is not None:
-            loaded = {n: load_table(cache_dir / f"{prefix}_{label}_{n}") for n in names}
-            if all(v is not None for v in loaded.values()):
+            present = all((cache_dir / f"{prefix}_{label}_{n}.parquet").exists()
+                          or (cache_dir / f"{prefix}_{label}_{n}.pkl").exists() for n in names)
+            loaded = {n: load_table(cache_dir / f"{prefix}_{label}_{n}") for n in names if n not in skip}
+            if present and all(v is not None for v in loaded.values()):
                 for n, df in loaded.items():
                     tables.setdefault(n, []).append(df)
                 stats["cached"] += 1
@@ -214,7 +219,8 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
             continue
         for n, df in out.items():
             save_table(df, cache_dir / f"{prefix}_{label}_{n}")
-            tables.setdefault(n, []).append(df)
+            if n not in skip:
+                tables.setdefault(n, []).append(df)
         meta = {"tables": sorted(out), "rows": {n: int(len(d)) for n, d in out.items()}, "source": source}
         if schema is not None:
             meta["schema"] = schema
@@ -226,5 +232,28 @@ def process(items: list[tuple[str, list[str]]], cache_dir: str | Path, prefix: s
     return merged, stats
 
 
+def cached_table(cache_dir: str | Path, prefix: str, name: str,
+                 keep: Callable[[pd.DataFrame], pd.DataFrame] | None = None, *,
+                 schema: str | None = None) -> pd.DataFrame | None:
+    """One table from every cached file of a data set, each reduced by `keep` before they
+    are joined (for tables too large to hold whole, such as 13F top holders). Files
+    cached under another schema are left out; None when no file holds the table."""
+    cache_dir = Path(cache_dir)
+    parts = []
+    for mark in sorted(cache_dir.glob(f"{prefix}_*.done.json")):
+        meta = json.loads(mark.read_text(encoding="utf-8"))
+        if name not in meta.get("tables", []) or (schema is not None and meta.get("schema") != schema):
+            continue
+        label = mark.name[len(prefix) + 1:-len(".done.json")]
+        df = load_table(cache_dir / f"{prefix}_{label}_{name}")
+        if df is None:
+            continue
+        parts.append(keep(df) if keep is not None else df)
+    if not parts:
+        return None
+    return pd.concat(parts, ignore_index=True)
+
+
 __all__ = ["FSDS_URLS", "INSIDER_URLS", "F13_PREFIXES", "SecAccessError", "quarter_items",
-           "f13_items", "member", "read_member", "parse_dates", "to_int", "valid_accession", "process"]
+           "f13_items", "member", "read_member", "parse_dates", "to_int", "valid_accession", "process",
+           "cached_table"]

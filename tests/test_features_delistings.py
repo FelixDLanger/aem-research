@@ -270,3 +270,46 @@ def test_exchange_comes_from_the_exchange_row_of_the_same_accession_in_another_f
     assert c["BBB"] == "performance_nyse_amex"                  # the issuer's earlier NYSE Form 25
     assert c["CCC~eod"] == "performance_nasdaq"                 # from the symbol list (EODHD)
     assert c["DDD"] == "performance"                            # nothing known: the exchange stays open
+
+
+def test_breadth_liquidity_and_listing_for_the_sec_panel():
+    s, panel, companies, fund, ins, breadth = feature_inputs()
+    pf = ft.price_features(panel, [s])
+    keys = ft.ticker_ciks(pf, companies, [])
+    cfg = load_config(CONFIG).data
+    listed = pd.DataFrame({"cik": range(100, 112), "start_date": s, "listed": [True] * 11 + [False]})
+    listed.loc[3, "listed"] = False                                    # T03: OTC at the start date
+    f = ft.assemble(pf, keys, fund, ins, breadth, cfg, liquidity="breadth", min_breadth=40, listed=listed)
+    by = f.set_index("ticker")
+    assert not by.loc["T00", "in_universe"] and not by.loc["T00", "liquid"]    # 5 holders < 40
+    assert by.loc["T02", "in_universe"] and by.loc["T02", "liquid"]           # 40 holders
+    assert not by.loc["T03", "in_universe"] and not by.loc["T03", "listed"]
+    assert by.loc["T04", "in_universe"]
+    vol = ft.assemble(pf, keys, fund, ins, breadth, cfg)                     # the vendor default is unchanged
+    assert vol.set_index("ticker").loc["T00", "in_universe"] and vol["listed"].all()
+
+
+def test_breadth_threshold_calibrates_on_the_volume_screen():
+    cfg = load_config(CONFIG).data
+    n = 400
+    rng = np.random.default_rng(3)
+    b = rng.integers(1, 60, n)
+    f = pd.DataFrame({"fund_available": pd.Timestamp("2016-01-01"), "sic": 3571, "entry_price_unadjusted": 10.0,
+                      "market_cap": 5e8, "breadth": b, "dollar_volume_20d": np.where(b >= 12, 5e5, 5e4)})
+    out = ft.calibrate_breadth(f, cfg)
+    assert out["k"] == 12 and out["agreement"] == 1.0 and out["youden"] == 1.0
+    f2 = f.assign(dollar_volume_20d=5e5)                                     # nothing fails the volume screen
+    assert ft.calibrate_breadth(f2, cfg)["k"] == 3 and "floor" in ft.calibrate_breadth(f2, cfg)["basis"]
+    assert ft.calibrate_breadth(f.iloc[:10], cfg)["k"] == 3                 # too few windows
+
+
+def test_hole_keys_match_the_hole_counts():
+    s, panel, companies, fund, ins, breadth = feature_inputs()
+    pf = ft.price_features(panel, [s])
+    f = ft.assemble(pf, ft.ticker_ciks(pf, companies, []), fund, ins, breadth, load_config(CONFIG).data)
+    ghost = pd.DataFrame({"cik": [500, 501], "start_date": s, "public_float": [5e8, 5e9]})
+    sym = [pd.DataFrame({"symbol": ["G", "H"], "issuer_cik": [500, 501], "first_seen": [s] * 2, "last_seen": [s] * 2,
+                         "filings": [1, 1]})]
+    allf = pd.concat([fund, ghost], ignore_index=True)
+    keys = ft.universe_hole_keys(allf, f, sym)
+    assert keys["cik"].tolist() == [500]                                    # 501 is above the size range

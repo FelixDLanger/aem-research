@@ -39,6 +39,10 @@ def test_shipped_config_loads():
     # D9: unplanned findings are welcome, labeled, logged, and confirmed before they get weight
     assert "D9" in dec and {"report", "discovery", "confirmation", "terminal", "log"} <= set(cfg.get("exploration"))
     assert "D9" in cfg.get("analysis_hierarchy") and "D9" in cfg.get("estimation.outputs_to_terminal")
+    # D10: the SEC price panel is primary, the vendor panel with the SEC fill is robustness B
+    assert "D10" in dec and {"primary", "splits", "new_series", "as_of", "first_formation_date", "liquidity",
+                             "listing", "robustness_b", "validation", "calibration"} <= set(cfg.get("price_basis"))
+    assert cfg.get("outcomes.sec_max_gap_days") == 200 and cfg.get("data_sources.sec_fails_start") == "200907a"
 
 
 def test_open_review_items_block_the_lock(final_config):

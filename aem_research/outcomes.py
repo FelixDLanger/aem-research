@@ -17,7 +17,7 @@ Rules (pre-registered in config/preregistration.yaml):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -249,11 +249,71 @@ def _compute_outcomes(spec: OutcomeSpec, prices: pd.DataFrame, starts: pd.DataFr
 
 def compute_outcomes(cfg: StudyConfig, prices: pd.DataFrame, starts: pd.DataFrame,
                      delistings: pd.DataFrame | None = None, *, price_col: str = "price",
-                     as_of=None) -> pd.DataFrame:
-    """Outcomes for the study. Requires a locked pre-registration."""
+                     as_of=None, overrides: dict | None = None) -> pd.DataFrame:
+    """Outcomes for the study. Requires a locked pre-registration. `overrides` replaces spec
+    fields for a panel with other spacing (the SEC quarter-end panel: max_gap_days)."""
     require_locked(cfg)
     spec = OutcomeSpec.from_config(cfg.data)
+    if overrides:
+        spec = replace(spec, **overrides)
     return _compute_outcomes(spec, prices, starts, delistings, price_col=price_col, as_of=as_of)
+
+
+def quarter_end_panel(panel: pd.DataFrame, *, price_col: str = "price", tolerance_days: int = 10) -> pd.DataFrame:
+    """A daily panel sampled like the SEC panel: per ticker, the last price on or before each
+    quarter-end (within tolerance_days), dated the day after the quarter-end."""
+    cols = ["ticker", "date", price_col, "source"]
+    if panel is None or panel.empty:
+        return pd.DataFrame(columns=cols)
+    p = panel[["ticker", "date", price_col] + (["source"] if "source" in panel.columns else [])].copy()
+    p["date"] = _ns(p["date"])
+    p = p.dropna(subset=["date"])
+    p["qe"] = p["date"].dt.to_period("Q").dt.end_time.dt.normalize().astype("datetime64[ns]")
+    p = p.sort_values(["ticker", "date"], kind="mergesort")
+    last = p.groupby(["ticker", "qe"], sort=False, observed=True).tail(1)
+    last = last[(last["qe"] - last["date"]) <= pd.Timedelta(days=tolerance_days)]
+    out = last.assign(date=(last["qe"] + pd.Timedelta(days=1)).astype("datetime64[ns]")).drop(columns="qe")
+    if "source" not in out.columns:
+        out["source"] = "vendor"
+    return out[cols].reset_index(drop=True)
+
+
+def touch_sampling_ratios(spec: OutcomeSpec, panel: pd.DataFrame, starts: pd.DataFrame, *, sample_start,
+                          horizons=(3,), multiples=None, quarterly_max_gap_days: int = 200) -> pd.DataFrame:
+    """How much quarter-end sampling lowers touch rates, measured before the sample (D10).
+
+    Every start date must precede `sample_start`, so no window of the locked sample is
+    computed. Returns per horizon and multiple only the ratio of the quarter-end touch
+    rate to the daily touch rate on the same windows, and the window count."""
+    st = starts.copy()
+    st["start_date"] = _ns(st["start_date"])
+    if len(st) and st["start_date"].max() >= pd.Timestamp(sample_start):
+        raise ValueError("touch_sampling_ratios is for start dates before the sample only")
+    cols = ["horizon_years", "multiple", "windows", "quarter_end_over_daily"]
+    if panel is None or panel.empty or st.empty:
+        return pd.DataFrame(columns=cols)
+    multiples = tuple(multiples or spec.touch_multiples)
+    as_of = panel_as_of(panel)
+    # only the tickers and years the windows need: the full vendor panel is never copied
+    last_day = st["start_date"].max() + pd.DateOffset(years=int(max(horizons))) + pd.Timedelta(days=31)
+    keep = panel["ticker"].isin(set(st["ticker"])).to_numpy() & (_ns(panel["date"]) <= last_day).to_numpy()
+    panel = panel[keep]
+    daily = _compute_outcomes(spec, panel, st, as_of=as_of)
+    qspec = replace(spec, max_gap_days=int(quarterly_max_gap_days))
+    qtr = _compute_outcomes(qspec, quarter_end_panel(panel), st, as_of=as_of)
+    ok = [COMPLETE, DELISTED, ENDED]
+    keys = ["ticker", "start_date", "horizon_years"]
+    tcols = [touch_col(m) for m in multiples]
+    both = (daily[daily["status"].isin(ok)][keys + tcols]
+            .merge(qtr[qtr["status"].isin(ok)][keys + tcols], on=keys, suffixes=("_d", "_q")))
+    rows = []
+    for h in horizons:
+        b = both[both["horizon_years"] == h]
+        for m in multiples:
+            d, q = b[f"{touch_col(m)}_d"].mean(), b[f"{touch_col(m)}_q"].mean()
+            rows.append({"horizon_years": int(h), "multiple": float(m), "windows": int(len(b)),
+                         "quarter_end_over_daily": round(float(q / d), 3) if d and d > 0 else np.nan})
+    return pd.DataFrame(rows, columns=cols)
 
 
 def base_rates(outcomes: pd.DataFrame, multiples=(3.0, 10.0), group_cols=("horizon_years",)) -> pd.DataFrame:

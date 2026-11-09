@@ -5,7 +5,8 @@ import pytest
 from aem_research.config import PreregistrationError, load_config, lock_config
 from aem_research.outcomes import (CENSORED, COMPLETE, DELISTED, ENDED, NO_ENTRY, OutcomeSpec,
                                    _compute_outcomes, base_rates, build_price_panel, build_starts,
-                                   compute_outcomes, days_col, touch_col)
+                                   compute_outcomes, days_col, quarter_end_panel, touch_col,
+                                   touch_sampling_ratios)
 from conftest import bseries
 
 SPEC = OutcomeSpec(horizons_years=(3,), touch_multiples=(3.0, 4.0, 6.24, 10.0))
@@ -183,3 +184,21 @@ def test_build_starts_min_price():
     panel = pd.concat([bseries("A", "2015-01-02", [0.5] * 5), bseries("B", "2015-01-02", [5.0] * 5)])
     st = build_starts(panel, (2015, 2015), min_price=1.0)
     assert st["ticker"].tolist() == ["B"] and st["start_date"].iloc[0] == pd.Timestamp("2015-01-01")
+
+
+def test_quarter_end_sampling_dates_prices_for_the_next_start():
+    p = bseries("A", "2014-12-01", np.linspace(10, 20, 150))
+    q = quarter_end_panel(p)
+    assert list(q["date"].dt.strftime("%Y-%m-%d")) == ["2015-01-01", "2015-04-01", "2015-07-01"]
+    assert q["price"].iloc[0] == pytest.approx(p[p["date"] <= "2014-12-31"]["price"].iloc[-1])
+
+
+def test_quarter_end_touches_miss_spikes_and_stay_outside_the_sample():
+    vals = [10.0] * 50 + [35.0] * 5 + [10.0] * 1000                  # from Dec 2011; a one-week spike to 3.5x in Feb 2012
+    p = bseries("A", "2011-12-01", vals)
+    p["source"] = "simfin"
+    starts = pd.DataFrame({"ticker": ["A"], "start_date": [pd.Timestamp("2012-01-01")]})
+    r = touch_sampling_ratios(SPEC, p, starts, sample_start="2013-01-01", horizons=(3,), multiples=(3.0,))
+    assert r.iloc[0]["quarter_end_over_daily"] == 0.0 and r.iloc[0]["windows"] == 1
+    with pytest.raises(ValueError, match="before the sample"):
+        touch_sampling_ratios(SPEC, p, starts.assign(start_date=pd.Timestamp("2013-01-01")), sample_start="2013-01-01")

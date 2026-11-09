@@ -159,14 +159,20 @@ def _tercile_low(x: pd.Series, size: pd.Series) -> pd.Series:
 
 def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, ins: pd.DataFrame | None,
              breadth: pd.DataFrame | None, cfg_data: dict, prices13: pd.DataFrame | None = None,
-             sales: pd.DataFrame | None = None) -> pd.DataFrame:
+             sales: pd.DataFrame | None = None, *, liquidity: str = "volume", min_breadth: int | None = None,
+             listed: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per ticker and start date with every feature and the universe flag.
 
     Size and price filters use the unadjusted entry price. Vendor histories are rescaled
     for every later split, so a stock that later reverse-splits 1:10 shows ten times its
     actual price; filtering on that would use the future. Where 13F holders report the
     stock, the unadjusted price is the vendor price times the ratio of the 13F implied
-    quarter-end price to the vendor's quarter-end price; elsewhere the vendor's close."""
+    quarter-end price to the vendor's quarter-end price; elsewhere the vendor's close.
+
+    On the SEC price panel (D10) the entry price is already the price of the day, there is
+    no daily volume, and listing is not implied by the source: `liquidity="breadth"` swaps
+    the dollar-volume screen for a minimum number of 13F holders (`min_breadth`), and
+    `listed` (cik, start_date, listed) adds the exchange-listing condition."""
     u = cfg_data.get("universe", {})
     cap = u.get("market_cap_usd", {}) or {}
     cohort = cfg_data.get("turnaround_cohort", {}) or {}
@@ -227,10 +233,24 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
 
     sic = pd.to_numeric(f["sic"], errors="coerce")
     f["is_filer"] = f["fund_available"].notna()
+    if liquidity == "breadth":
+        liquid = pd.to_numeric(f["breadth"], errors="coerce") >= float(min_breadth if min_breadth is not None else 3)
+    else:
+        liquid = f["dollar_volume_20d"] >= float(u.get("min_median_dollar_volume_20d_usd", 1e5))
+    f["liquid"] = liquid.fillna(False).astype(bool)
+    if listed is not None and len(listed):
+        ls = _ns(listed[["cik", "start_date", "listed"]].copy(), "start_date")
+        ls["cik"] = pd.to_numeric(ls["cik"], errors="coerce").astype("Int64")
+        f = f.merge(ls.drop_duplicates(["cik", "start_date"]), on=["cik", "start_date"], how="left")
+        f["listed"] = f["listed"].astype("boolean").fillna(False).astype(bool)
+    elif listed is not None:
+        f["listed"] = False
+    else:
+        f["listed"] = True
     f["in_universe"] = (f["is_filer"] & (sic != 6770)
                         & (f["entry_price_unadjusted"] >= float(u.get("min_price_usd", 1.0)))
                         & f["market_cap"].between(float(cap.get("min", 1e8)), float(cap.get("max", 2e9)))
-                        & (f["dollar_volume_20d"] >= float(u.get("min_median_dollar_volume_20d_usd", 1e5))))
+                        & f["liquid"] & f["listed"])
     f["in_universe"] = f["in_universe"].fillna(False).astype(bool)
 
     # attention: bottom tercile net of size, within each start date's universe
@@ -265,6 +285,52 @@ def assemble(pf: pd.DataFrame, keys: pd.DataFrame, fund: pd.DataFrame | None, in
     for c in ("h2a", "h2b", "h2_placebo"):
         f.loc[~f["cohort_known"], c] = pd.NA
     return f
+
+
+def calibrate_breadth(features: pd.DataFrame, cfg_data: dict, ks=range(1, 41), floor: int = 3) -> dict:
+    """The 13F-holder count that best stands in for the dollar-volume screen (D10).
+
+    On the vendor panel's windows that pass every other universe filter and have both
+    measures, each threshold k is scored by Youden's J (share of volume passers with at
+    least k holders plus share of volume failers with fewer, minus one); the smallest k
+    with the highest J wins, never below `floor` (a 13F price needs three filers).
+    Counts only – no returns."""
+    out = {"k": int(floor), "basis": "floor (no vendor windows to calibrate on)"}
+    if features is None or not len(features) or "breadth" not in features.columns:
+        return out
+    u = cfg_data.get("universe", {})
+    cap = u.get("market_cap_usd", {}) or {}
+    f = features
+    sic = pd.to_numeric(f["sic"], errors="coerce")
+    base = (f["fund_available"].notna() & (sic != 6770)
+            & (f["entry_price_unadjusted"] >= float(u.get("min_price_usd", 1.0)))
+            & f["market_cap"].between(float(cap.get("min", 1e8)), float(cap.get("max", 2e9))))
+    b = pd.to_numeric(f["breadth"], errors="coerce")
+    dv = pd.to_numeric(f["dollar_volume_20d"], errors="coerce")
+    w = base.fillna(False) & b.notna() & dv.notna()
+    if w.sum() < 50:
+        return out
+    passed = (dv[w] >= float(u.get("min_median_dollar_volume_20d_usd", 1e5))).to_numpy()
+    bb = b[w].to_numpy()
+    n_pass, n_fail = int(passed.sum()), int((~passed).sum())
+    out.update(n=int(w.sum()), volume_fail_share=round(n_fail / len(passed), 4))
+    if n_pass == 0 or n_fail == 0:
+        out["basis"] = "floor (the volume screen passes or fails every window)"
+        return out
+    best = None
+    for k in ks:
+        pred = bb >= k
+        tpr = float((pred & passed).sum() / n_pass)
+        tnr = float((~pred & ~passed).sum() / n_fail)
+        j = tpr + tnr - 1.0
+        if best is None or j > best[1] + 1e-12:
+            best = (int(k), j, tpr, tnr, float((pred == passed).mean()))
+    k = max(best[0], floor)
+    pred = bb >= k
+    out.update(k=k, basis="Youden's J on the vendor panel", youden=round(best[1], 4),
+               tpr=round(float((pred & passed).sum() / n_pass), 4), tnr=round(float((~pred & ~passed).sum() / n_fail), 4),
+               agreement=round(float((pred == passed).mean()), 4))
+    return out
 
 
 def market_regime(features: pd.DataFrame) -> pd.DataFrame:
@@ -385,6 +451,25 @@ def coverage_report(features: pd.DataFrame, *, h4_start=None) -> pd.DataFrame:
         "placebo_cohort": g["h2_placebo"].apply(lambda s: int(s.fillna(False).sum())),
     })
     return rep.round(3).reset_index()
+
+
+def universe_hole_keys(fund: pd.DataFrame, features: pd.DataFrame, bridges: list[pd.DataFrame], *,
+                       cap_min: float = 1e8, cap_max: float = 2e9) -> pd.DataFrame:
+    """(cik, start_date) of every hole `universe_holes` counts: filers in the size range with
+    a trading symbol on file that the price data never priced."""
+    cols = ["cik", "start_date"]
+    if fund is None or fund.empty:
+        return pd.DataFrame(columns=cols)
+    syms = pd.concat([b for b in bridges if b is not None and len(b)], ignore_index=True) if bridges else pd.DataFrame()
+    listed = set(syms["issuer_cik"].astype("int64")) if len(syms) else set()
+    priced = set(features["cik"].dropna().astype("int64")) if features is not None and len(features) else set()
+    f = fund[pd.to_numeric(fund["public_float"], errors="coerce").between(cap_min, cap_max)]
+    f = f[f["cik"].astype("int64").isin(listed)] if listed else f
+    f = f[~f["cik"].astype("int64").isin(priced)]
+    out = f[["cik", "start_date"]].drop_duplicates().copy()
+    out["cik"] = out["cik"].astype("int64")
+    out["start_date"] = pd.to_datetime(out["start_date"]).astype("datetime64[ns]")
+    return out.reset_index(drop=True)
 
 
 def universe_holes(fund: pd.DataFrame, features: pd.DataFrame, bridges: list[pd.DataFrame], *,

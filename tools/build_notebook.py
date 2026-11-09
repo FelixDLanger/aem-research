@@ -38,13 +38,13 @@ def phase(name, body, before="", after=""):
 md("""
 # AEM base-rate study – 01 coverage audit and point-in-time features
 
-**What this does.** Checks the SimFin cache on your Drive, reads the Stooq bulk file, benchmarks both against SEC delisting filings, tells you whether a paid source (EODHD) would add value, builds the point-in-time features from the SEC's free data sets and the macro regime variables from FRED, and saves everything to Drive, including an Excel workbook. The outcome engine is built and tested, but stays locked until the pre-registration is locked.
+**What this does.** Builds the study's primary price basis from SEC filings alone (D10: 13F quarter-end prices, the SEC fails-to-deliver files, splits found from the holders' share counts), checks the SimFin cache and the Stooq bulk file as the robustness panel (B), builds the point-in-time features from the SEC's free data sets and the macro regime variables from FRED, and saves everything to Drive, including an Excel workbook. The outcome engine is built and tested, but stays locked until the pre-registration is locked.
 
 **Before you run** (Runtime → Run all):
 1. Colab secret `SEC_USER_AGENT` = `Your Name your@email` (key icon in the left bar, notebook access on). The SEC asks automated clients to identify themselves.
 2. The Stooq bulk file `d_us_txt.zip`, still zipped, in `My Drive/aem-research/data/stooq/` – see Phase B.
 
-**Run time.** The downloads run on Google's servers, not over your own connection: about 9 GB from the SEC on the first run, one to two hours in all. Keep the tab open and the device awake. Every file is cached on Drive as it finishes, so after a disconnect, Run all resumes where it stopped. Later runs take a few minutes.
+**Run time.** The downloads run on Google's servers, not over your own connection: about 9 GB from the SEC on the first run, one to two hours in all. Keep the tab open and the device awake. Every file is cached on Drive as it finishes, so after a disconnect, Run all resumes where it stopped. The first run after Nov 9, 2026 reads the 13F files again (they now keep each security's top holders) and downloads the fails-to-deliver files once – about as long as the first run. Later runs take a few minutes.
 
 **When it ends,** the last cell prints one block – results, timings and any errors. Paste it into the chat (it is also saved as `run_summary.txt` in `My Drive/aem-research/output/`). A phase that fails is recorded in that block and the run carries on. If the test suite fails, the run stops at once and prints the same block. If Colab crashes or disconnects before the end, `run_progress.txt` in the same folder shows how far it got – paste its last lines; Run all then resumes from the cached files.
 
@@ -54,8 +54,9 @@ md("""
 | A SimFin cache | no | Coverage of your cached prices, including names that stopped trading |
 | B Stooq bulk | no | Parse the zip, coverage, overlap with SimFin, adjustment basis |
 | C SEC index | no | Form 25 delistings and merger filings, cached per quarter |
-| D Verdict | no | Delisting coverage → unpriced share → EODHD: not needed, optional or recommended |
-| F Features | no | XBRL financials, Form 4 insiders, 13F breadth, FRED regime → universe, cohorts, signals, power – counts only |
+| D Verdict | no | Delisting coverage → unpriced share of the vendor panel |
+| F Features | no | XBRL financials, Form 4 insiders, 13F holdings, SEC fails-to-deliver files, FRED regime → SEC price panel, universe, cohorts, signals, power – counts only |
+| F Calibration | no | Quarter-end vs daily touch rates on 2009–2012 start dates, before the sample – ratios only |
 | E Outcomes | **yes** | Touch and end multiples – only after the lock |
 
 Nothing in phases A–F looks at returns, so running them before the lock keeps the pre-registration clean. Raw vendor data stays on Drive; never commit it to the repository.
@@ -346,20 +347,21 @@ md("""
 Three free SEC data sets, each downloaded once per file and cached on Drive as a small extract (the raw zips are never stored):
 - **Financial Statement Data Sets** (XBRL from 10-K and 10-Q): trailing free cash flow, net cash, revenue, shares, dilution, the S1 proxy.
 - **Insider Transactions Data Sets** (Form 4): officer and director open-market purchases (and sales, for the placebo), split into routine and opportunistic insiders (Cohen, Malloy and Pomorski 2012), plus a symbol-to-CIK bridge.
-- **Form 13F Data Sets**: institutional breadth (the attention proxy) and implied unadjusted prices (to undo later split adjustments in the size filter).
+- **Form 13F Data Sets**: institutional breadth (the attention proxy), implied quarter-end prices and each security's ten largest holders – the backbone of the SEC price panel (D10).
+- **Fails-to-deliver files** (SEC, twice a month): CUSIP, ticker and the previous day's close for every security with failed deliveries – the bridge to companies SimFin never covered, prices before 2013 and the last price before a company disappears.
 
 The next cells build the universe at every formation date (market cap US$100m–2bn, price ≥ US$1, liquidity, SPAC shells out), the fallen-quality cohort, the placebo and the H4 signals, run the pre-lock and power checks, and add the FRED regime variables. Everything is counts – no returns – and a look-ahead guard rejects the features if any of them uses information published after its start date. If the SEC blocks a download, zips saved by hand into `My Drive/aem-research/data/sec/manual/` (same file names as on sec.gov) are used instead.
 """)
 
 code("""
 # ── Phase F · SEC data sets: XBRL financials, Form 4 insiders, Form 13F holdings ──
-from aem_research.data import fsds, insider, thirteenf
+from aem_research.data import fsds, ftd, insider, thirteenf
 
 SEC_MANUAL = paths.sec_dir / "manual"
 Y0 = int(cfg.get("starts.years")[0])
 THIS_YEAR = datetime.now(timezone.utc).year
 kw = dict(client=client, offline=OFFLINE, local_dir=SEC_MANUAL)
-subs = facts = ins_tx = ins_bridge = f13_breadth = f13_names = None
+subs = facts = ins_tx = ins_bridge = f13_breadth = f13_names = FTD_NAMES = None
 sec_set_stats, SEC_SET_LINES = {}, {}
 
 
@@ -387,9 +389,13 @@ with LOG.phase("F Form 4 insiders"):
                                           THIS_YEAR, **kw)
     keep_stats("insider", st)
 with LOG.phase("F 13F holdings"):
-    print("Form 13F Data Sets")
+    print("Form 13F Data Sets (re-read once after Nov 8, 2026: the top holders find splits)")
     f13_breadth, f13_names, st = thirteenf.load(paths.sec_dir, **kw)
     keep_stats("form13f", st)
+with LOG.phase("F fails-to-deliver"):
+    print("SEC fails-to-deliver files (half-month, from 2009): the CUSIP-ticker bridge and daily closes")
+    FTD_NAMES, st = ftd.load(paths.sec_dir, start=cfg.get("data_sources.sec_fails_start", ftd.START), **kw)
+    keep_stats("fails", st)
 if sec_set_stats:
     show(pd.DataFrame(sec_set_stats).T)
 REPORT["sec_datasets"] = SEC_SET_LINES
@@ -398,7 +404,7 @@ REPORT["sec_datasets"] = SEC_SET_LINES
 md("""
 ## Phase F – EODHD gap-fill (optional)
 
-The first run found that about a third of the companies in range in 2013 never appear in SimFin or Stooq – they delisted before those sources' coverage. With the Colab secret `EODHD_API_KEY`, this step downloads the end-of-day history of every listed or delisted US common stock that the SEC symbol bridges tie to an XBRL filer SimFin lacks (one call per ticker, saved on Drive in chunks), plus EODHD's ticker lists, which give the listing exchange for the delisting returns. Without the secret it uses whatever an earlier run saved, or is skipped.
+Not needed any more and off by default: D10 replaced it with the SEC price panel below, and EODHD's personal plans do not cover publishing results. With the Colab secret `EODHD_API_KEY` it still fills the vendor panel (B) with delisted names for a private cross-check; without the secret it is skipped.
 """)
 
 phase("F EODHD gap-fill", before="""
@@ -432,14 +438,68 @@ else:
     print(REPORT["eodhd"])
 """)
 
+md("""
+## Phase F – SEC price panel (the primary price basis, D10)
+
+Every price the primary analysis uses comes from SEC filings, so the companies that later delisted are priced exactly like the survivors and the published numbers rest on public data. Each company gets one quarter-end price per quarter: the median of market value over shares held across the 13F filers of its main CUSIP (at least three), else the fails-to-deliver close nearest the quarter-end. Splits are found from the holders' share counts (a split multiplies every holder's shares by the same ratio) and from CUSIP changes, and prices are restated in the units after the last split. Counts only – no returns.
+""")
+
+phase("F SEC prices", before="""
+# ── Phase F · SEC price panel: 13F quarter-end prices, fails-to-deliver files, splits ──
+from aem_research import secprices
+from aem_research.data import ftd
+
+SEC_PANEL, SEC_EVENTS, SEC_BRIDGE, SEC_AS_OF, FTD_PX, SEC_INFO = None, None, None, None, None, {}
+""", body="""
+if f13_breadth is None or not len(f13_breadth) or "price_13f" not in f13_breadth.columns:
+    print("No 13F prices on Drive – the SEC panel (option A) is skipped; the vendor panel stands in.")
+else:
+    names_sec = subs[["cik", "name"]] if subs is not None and len(subs) else None
+    comps = simfin.companies if simfin.found else None
+    if names_sec is not None and comps is not None and "company_name" in comps.columns:
+        names_sec = pd.concat([names_sec, comps[["cik", "company_name"]].rename(columns={"company_name": "name"})])
+    sym_bridges = [b for b in (ins_bridge, ft.instance_bridge(subs) if subs is not None and len(subs) else None)
+                   if b is not None and len(b)]
+    SEC_BRIDGE = secprices.bridge(f13_names, FTD_NAMES, comps, names_sec, sym_bridges)
+    print(f"CUSIP bridge: {len(SEC_BRIDGE):,} CUSIPs mapped ({SEC_BRIDGE['method'].value_counts().to_dict()})")
+    as_of_q = secprices.complete_through(f13_breadth)
+    mains = secprices.main_cusips(f13_breadth, SEC_BRIDGE)
+    holders = thirteenf.load_holders(paths.sec_dir, cusips=mains["cusip"].unique())
+    holders = holders.merge(mains[["cusip", "period"]].drop_duplicates(), on=["cusip", "period"], how="inner")
+    FTD_PX = ftd.load_px(paths.sec_dir, cusips=SEC_BRIDGE.loc[SEC_BRIDGE["cik"].isin(set(mains["cik"])), "cusip"].unique())
+    SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
+                                                            ftd_names=FTD_NAMES,
+                                                            max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
+    del holders, mains
+    SEC_AS_OF = secprices.as_of_date(as_of_q)
+    save_table(SEC_PANEL, paths.cache / "sec_panel")
+    save_table(SEC_EVENTS, paths.cache / "sec_splits")
+    print(f"SEC panel: {SEC_INFO['companies']:,} companies, {SEC_INFO['series']:,} series, as of {SEC_AS_OF.date()} · "
+          f"quarters from 13F {SEC_INFO['quarters_13f']:,}, from fails files {SEC_INFO['quarters_fails']:,}, "
+          f"final prices {SEC_INFO['final_prices']:,}")
+    print(f"Splits: {SEC_INFO['splits_holders']:,} from holders, {SEC_INFO['splits_cusip']:,} at CUSIP changes · "
+          f"new series {SEC_INFO['new_series']:,}")
+    REPORT["sec_prices"] = {"companies": SEC_INFO["companies"], "series": SEC_INFO["series"],
+                            "as_of": str(SEC_AS_OF.date()), "quarters_13f": SEC_INFO["quarters_13f"],
+                            "quarters_fails": SEC_INFO["quarters_fails"], "final_prices": SEC_INFO["final_prices"],
+                            "bridge": SEC_BRIDGE["method"].value_counts().to_dict()}
+    REPORT["splits"] = {"from_holders": SEC_INFO["splits_holders"], "at_cusip_changes": SEC_INFO["splits_cusip"],
+                        "new_series": SEC_INFO["new_series"]}
+""", after="""
+save_report()
+""")
+
 phase("F features", before="""
 # ── Phase F · Features, universe, pre-lock and power checks (counts only – no returns) ──
-from aem_research import delistings as dl, features as ft, fundamentals as fu
+from aem_research import delistings as dl, features as ft, fundamentals as fu, secprices
 from aem_research.outcomes import build_price_panel, panel_as_of
 
 FEATURES, DELIST, panel, PRELOCK, POWER, COVREP, holes, basis = None, None, None, None, None, None, None, None
+FEATURES_V, DELIST_V, FEATURES_B, DELIST_B, LIQ, SEC_CHECK, pf_sec, keys_sec = (None,) * 8
+as_of = None
 ST = cfg.get("starts")
 FORMATION = ft.formation_dates(ST["years"], ST.get("months", [1]))
+FORM_ALL = list(FORMATION)
 """, body="""
 panel = build_price_panel(simfin.prices if simfin.found else None, stq.prices if stq is not None else None,
                           gap_fill=EOD_PRICES)
@@ -483,22 +543,20 @@ else:
     ft.check_point_in_time(feats)        # raises if any feature postdates its start date: nothing is kept
     print("Look-ahead guard: passed")
     first = cfg.get("features.first_formation_date")
-    att, att_share = ft.choose_attention(feats, first["H4"])
-    feats["low_attention"] = feats["low_breadth"] if att == "breadth" else feats["low_turnover"]
-    print(f"Attention signal for H4: {att} (breadth known for {att_share:.0%} of H4 windows; rule: 80%)")
-    FEATURES = feats
-    basis = ft.price_basis_check(FEATURES)
+    att_v, _ = ft.choose_attention(feats, first["H4"])
+    feats["low_attention"] = feats["low_breadth"] if att_v == "breadth" else feats["low_turnover"]
+    FEATURES_V = feats
+    basis = ft.price_basis_check(FEATURES_V)
     if len(basis):
         print("Vendor close vs the 13F implied price at quarter-end (ratio near 1 = unadjusted close; "
               "names off by >10% had later splits, which the size filter now undoes):")
         show(basis)
         REPORT["price_basis"] = {f"{r.source}_off_10pct": r.share_off_10pct for r in basis.itertuples()}
-    COVREP = ft.coverage_report(FEATURES)
-    show(COVREP)
     cap = cfg.get("universe.market_cap_usd")
-    holes = ft.universe_holes(fund, FEATURES, bridges, cap_min=cap["min"], cap_max=cap["max"])
+    holes = ft.universe_holes(fund, FEATURES_V, bridges, cap_min=cap["min"], cap_max=cap["max"])
+    hole_keys = ft.universe_hole_keys(fund, FEATURES_V, bridges, cap_min=cap["min"], cap_max=cap["max"])
     if len(holes):
-        print("Listed filers in the size range that never appear in the price data (what a survivorship-free source would add):")
+        print("Listed filers in the size range that never appear in the vendor price data:")
         show(holes)
         REPORT["holes"] = {"median_unpriced_share": float(holes["unpriced_share"].median()),
                            "first_date": float(holes["unpriced_share"].iloc[0]),
@@ -506,7 +564,67 @@ else:
     seg = dl.map_ciks(dl.ended_segments(panel, as_of, stale_gap_days=cfg.get("outcomes.stale_gap_days", 30),
                                         max_gap_days=cfg.get("outcomes.max_gap_days", 120)),
                       simfin.companies, pd.concat(bridges, ignore_index=True) if bridges else None)
-    DELIST = dl.classify(seg, form25, merger, stq.groups if stq is not None else None, exchange_map=EOD_EXCHANGE)
+    DELIST_V = dl.classify(seg, form25, merger, stq.groups if stq is not None else None, exchange_map=EOD_EXCHANGE)
+    first = cfg.get("features.first_formation_date")
+
+    if SEC_PANEL is None or SEC_PANEL.empty:
+        LOG.warn("F features", "no SEC price panel – the vendor panel stands in for option A until the 13F data are on Drive")
+        FEATURES, DELIST, first_a = FEATURES_V, DELIST_V, pd.Timestamp(first["H2"])
+        att, att_share = ft.choose_attention(FEATURES, first["H4"])
+    else:
+        # ---- A (primary, D10): every price from the SEC panel ----
+        first_a = pd.Timestamp(cfg.get("price_basis.first_formation_date"))
+        FORM_A = [d for d in FORM_ALL if first_a <= d <= SEC_AS_OF]
+        sec_gap = cfg.get("outcomes.sec_max_gap_days", 200)
+        LIQ = ft.calibrate_breadth(FEATURES_V, cfg.data)
+        print(f"Liquidity for A: at least {LIQ['k']} 13F holders ({LIQ['basis']}; "
+              f"agreement with the dollar-volume screen {LIQ.get('agreement', 'n/a')})")
+        pf_sec = ft.price_features(SEC_PANEL, FORM_A, tolerance_days=ST.get("entry_tolerance_days", 7),
+                                   max_gap_days=sec_gap)
+        keys_sec = secprices.keys_for(pf_sec, SEC_PANEL)
+        breadth_a = thirteenf.breadth_at(f13_breadth, SEC_BRIDGE, FORM_A)
+        f25x = dl.form25_with_exchange(form25) if form25 is not None and len(form25) else None
+        sym_tab = secprices.symbol_table(FTD_NAMES, SEC_BRIDGE, bridges)
+        sym_ex = secprices.symbol_exchange(sym_tab, stq.groups if stq is not None else None, EOD_EXCHANGE)
+        listed = keys_sec[["cik", "start_date"]].assign(
+            listed=secprices.listed_flags(keys_sec, keys, f25x, sym_ex).to_numpy())
+        feats_a = ft.assemble(pf_sec, keys_sec, fund, signals, breadth_a, cfg.data, prices13=None,
+                              sales=sale_signals, liquidity="breadth", min_breadth=LIQ["k"], listed=listed)
+        ft.check_point_in_time(feats_a)
+        feats_a["price_basis"] = secprices.entry_source(feats_a, SEC_PANEL)
+        att, att_share = ft.choose_attention(feats_a, first["H4"])
+        feats_a["low_attention"] = feats_a["low_breadth"] if att == "breadth" else feats_a["low_turnover"]
+        FEATURES = feats_a
+        print("Look-ahead guard (A): passed")
+        seg_a = secprices.ended_segments(SEC_PANEL, SEC_AS_OF, stale_gap_days=cfg.get("outcomes.stale_gap_days", 30),
+                                         max_gap_days=sec_gap)
+        DELIST = dl.classify(seg_a, form25, merger, None,
+                             exchange_map=secprices.exchange_map_for(SEC_PANEL, f25x, sym_ex))
+        # ---- B (robustness): the vendor universe plus the companies the vendors never price ----
+        vend_ciks = set(keys["cik"].dropna().astype("int64"))
+        fill = FEATURES[FEATURES["in_universe"] & ~FEATURES["cik"].astype("Int64").isin(vend_ciks).fillna(False)]
+        FEATURES_B = pd.concat([FEATURES_V[FEATURES_V["in_universe"]].assign(panel_b="vendor"),
+                                fill.assign(panel_b="SEC fill")], ignore_index=True)
+        DELIST_B = pd.concat([DELIST_V.assign(panel_b="vendor"),
+                              DELIST[DELIST["ticker"].isin(set(fill["ticker"]))].assign(panel_b="SEC fill")],
+                             ignore_index=True)
+        REPORT["universe_b"] = {"windows": int(len(FEATURES_B)), "vendor_windows": int((FEATURES_B["panel_b"] == "vendor").sum()),
+                                "sec_fill_windows": int(len(fill)), "sec_fill_firms": int(fill["cik"].nunique())}
+        # ---- checks on the SEC panel, before the lock and without outcomes ----
+        SEC_CHECK = secprices.validate(SEC_PANEL, SEC_EVENTS, panel, keys)
+        hk = hole_keys[hole_keys["start_date"] >= first_a] if len(hole_keys) else hole_keys
+        if len(hk):
+            hk = hk.assign(listed=secprices.listed_flags(hk, None, f25x, sym_ex).to_numpy())
+            SEC_CHECK["holes_listed_share"] = round(float(hk["listed"].mean()), 4)
+            SEC_CHECK["holes_priced"] = secprices.holes_priced(hk[hk["listed"]], pf_sec, keys_sec)
+        SEC_CHECK["liquidity_k"] = LIQ["k"]
+        SEC_CHECK["liquidity_agreement"] = LIQ.get("agreement")
+        SEC_CHECK["listed_share"] = round(float(listed["listed"].mean()), 4) if len(listed) else None
+        REPORT["sec_check"] = SEC_CHECK
+        show(pd.Series(SEC_CHECK, name="SEC panel checks"))
+    print(f"Attention signal for H4: {att} (breadth known for {att_share:.0%} of H4 windows; rule: 80%)")
+    COVREP = ft.coverage_report(FEATURES)
+    show(COVREP)
     REPORT["delistings"] = dl.summary(DELIST)
     show(pd.Series(REPORT["delistings"], name="ended series"))
     POWER = ft.power_table(FEATURES)
@@ -515,12 +633,17 @@ else:
     REPORT["power"] = POWER.to_dict("records")
     save_table(FEATURES, paths.cache / "features")
     save_table(DELIST, paths.cache / "delistings")
+    save_table(FEATURES_V, paths.cache / "features_vendor")
+    save_table(DELIST_V, paths.cache / "delistings_vendor")
+    if FEATURES_B is not None:
+        save_table(FEATURES_B, paths.cache / "features_b")
+        save_table(DELIST_B, paths.cache / "delistings_b")
 
-    # Pre-lock checks (config: review_before_lock) – counts only
+    # Pre-lock checks (config: review_before_lock) – counts only, on the primary universe
     uni = FEATURES[FEATURES["in_universe"]]
 
     def known(col, start):
-        w = uni[uni["start_date"] >= pd.Timestamp(start)]
+        w = uni[uni["start_date"] >= max(pd.Timestamp(start), first_a)]
         return float(w[col].notna().mean()) if len(w) else 0.0
 
     checks = {"fcf_known": known("fcf_pos", first["H2"]), "net_cash_known": known("net_cash_pos", first["H2"]),
@@ -529,19 +652,61 @@ else:
     PRELOCK = {k: f"{v:.1%} {'ok' if v >= 0.8 else 'BELOW 80%'}" for k, v in checks.items()}
     unk = REPORT["delistings"].get("share_unknown", 0.0)
     PRELOCK["delisting_unknown"] = f"{unk:.1%} {'ok' if unk < 0.25 else 'ABOVE 25%'}"
+    if SEC_CHECK:
+        for name, key, bar in (("sec_returns_agree", "returns_agree", 0.95), ("split_precision", "split_precision", 0.9),
+                               ("split_recall", "split_recall", 0.9), ("holes_priced", "holes_priced", 0.8)):
+            v = SEC_CHECK.get(key)
+            PRELOCK[name] = "n/a" if v is None else f"{v:.1%} {'ok' if v >= bar else f'BELOW {bar:.0%}'}"
     PRELOCK["universe_windows"] = int(len(uni))
     PRELOCK["h2a_cohort_windows"] = int(uni["h2a"].fillna(False).sum())
     PRELOCK["h2b_cohort_windows"] = int(uni["h2b"].fillna(False).sum())
     PRELOCK["placebo_cohort_windows"] = int(uni["h2_placebo"].fillna(False).sum())
     REPORT["prelock"] = PRELOCK
-    REPORT["s1_gaps"] = ft.s1_gaps(FEATURES, first["H4"])
+    REPORT["s1_gaps"] = ft.s1_gaps(FEATURES, max(pd.Timestamp(first["H4"]), first_a))
     REPORT["coverage_summary"] = {"universe_per_date_median": int(COVREP["universe"].median()),
                                   "universe_first_date": int(COVREP["universe"].iloc[0]),
                                   "universe_last_date": int(COVREP["universe"].iloc[-1])}
-    REPORT["features"] = {"formation_dates": len(FORMATION), "as_of": str(as_of.date()), "attention_signal": att,
-                          "universe_windows": int(len(uni)), "tickers_in_universe": int(uni["ticker"].nunique()),
+    REPORT["features"] = {"formation_dates": int(FEATURES["start_date"].nunique()),
+                          "price_basis": "SEC panel (A)" if FEATURES is not FEATURES_V else "vendor panel (A unavailable)",
+                          "as_of": str((SEC_AS_OF if FEATURES is not FEATURES_V else as_of).date()),
+                          "vendor_as_of": str(as_of.date()), "attention_signal": att,
+                          "universe_windows": int(len(uni)), "firms_in_universe": int(uni["cik"].nunique()),
                           "price_from_13f": round(float((uni["price_basis"] == "13F").mean()), 4)}
     show(pd.Series(PRELOCK, name="pre-lock checks"))
+""", after="""
+save_report()
+""")
+
+md("""
+## Phase F – Quarter-end vs daily touch rates (before the sample)
+
+The primary analysis counts a touch only at a quarter-end close (D10). This step measures how much that lowers touch rates, on the vendor panel's small caps for start dates in 2009–2012 – before the sample, so no window of the locked study is computed. Only the ratios are shown; they translate the study's quarter-end rates into daily ones for the terminal.
+""")
+
+phase("F calibration", before="""
+# ── Phase F · Quarter-end over daily touch rates, 2009–2012 start dates (ratios only) ──
+from aem_research.outcomes import OutcomeSpec, touch_sampling_ratios
+
+CALIB = None
+""", body="""
+if panel is None or panel.empty:
+    print("No vendor panel – skipped.")
+else:
+    pre_dates = ft.formation_dates(range(2009, 2013), ST.get("months", [1]))
+    pfp = ft.price_features(panel, pre_dates, tolerance_days=ST.get("entry_tolerance_days", 7),
+                            max_gap_days=cfg.get("outcomes.max_gap_days", 120))
+    capr = cfg.get("universe.market_cap_usd")
+    mcap = pfp["entry_close_raw"] * pfp["shares_vendor"]
+    sel = pfp[(pfp["entry_close_raw"] >= cfg.get("universe.min_price_usd", 1.0)) & mcap.between(capr["min"], capr["max"])
+              & (pfp["dollar_volume_20d"] >= cfg.get("universe.min_median_dollar_volume_20d_usd", 1e5))]
+    spec = OutcomeSpec.from_config(cfg.data)
+    CALIB = touch_sampling_ratios(spec, panel, sel[["ticker", "start_date"]], sample_start=FORM_ALL[0],
+                                  horizons=(3, 5), quarterly_max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
+    show(CALIB)
+    if len(CALIB):
+        c3 = CALIB[CALIB["horizon_years"] == 3]
+        REPORT["calibration"] = {"windows_3y": int(c3["windows"].max()) if len(c3) else 0,
+                                 **{f"3y_{m:g}x": v for m, v in zip(c3["multiple"], c3["quarter_end_over_daily"])}}
 """, after="""
 save_report()
 """)
@@ -579,7 +744,7 @@ FEATURE_COLS = ["ticker", "cik", "start_date", "entry_date", "entry_price_unadju
                 "shares_source", "dollar_volume_20d", "drawdown", "fallen", "fcf_pos", "net_cash_pos", "s1_proxy",
                 "low_dilution", "insider_any", "insider_cluster", "insider_opportunistic", "insider_routine_only",
                 "insider_unclassified_only", "insider_post_results_cluster", "sale_any", "breadth", "low_breadth",
-                "low_turnover", "low_attention", "h2a", "h2b", "h2_placebo", "sic", "source"]
+                "low_turnover", "low_attention", "h2a", "h2b", "h2_placebo", "sic", "source", "liquid", "listed"]
 """, body="""
 summary = {"run (UTC)": REPORT["generated_utc"], "repo commit": COMMIT, "config sha256": cfg.sha256,
            "lock status": cfg.status, "EODHD verdict": verdict.get("verdict"), "verdict reason": verdict.get("reason"),
@@ -590,11 +755,19 @@ uni_rows = None
 if FEATURES is not None:
     uni_rows = FEATURES.loc[FEATURES["in_universe"], [c for c in FEATURE_COLS if c in FEATURES.columns]]
 prelock_sheet = {**(PRELOCK or {}), **{f"S1 gap: {k}": v for k, v in (REPORT.get("s1_gaps") or {}).items()},
+                 **{f"SEC check: {k}": v for k, v in (REPORT.get("sec_check") or {}).items()},
                  **{f"EODHD: {k}": v for k, v in (REPORT.get("eodhd") or {}).items()}} or None
+uni_b = None
+if FEATURES_B is not None:
+    uni_b = FEATURES_B[[c for c in FEATURE_COLS + ["panel_b"] if c in FEATURES_B.columns]]
+sec_sheet = {**{f"panel: {k}": v for k, v in (REPORT.get("sec_prices") or {}).items()},
+             **{f"splits: {k}": v for k, v in (REPORT.get("splits") or {}).items()},
+             **{f"universe B: {k}": v for k, v in (REPORT.get("universe_b") or {}).items()}} or None
 sheets = {"Summary": summary, "Coverage by date": COVREP, "Pre-lock checks": prelock_sheet, "Power": POWER,
-          "Regime": REGIME, "Universe holes": holes, "Price basis": basis, "Delistings": DELIST,
+          "Regime": REGIME, "SEC price panel": sec_sheet, "Splits": SEC_EVENTS, "Calibration": CALIB,
+          "Universe holes": holes, "Price basis": basis, "Delistings": DELIST,
           "SEC data sets": pd.DataFrame(sec_set_stats).T.reset_index() if sec_set_stats else None,
-          "Universe windows": uni_rows}
+          "Universe windows": uni_rows, "Universe B windows": uni_b}
 written = write_workbook(paths.output / "aem_results.xlsx", sheets)
 print(f"Saved aem_results.xlsx to {paths.output}: {written}")
 """, after="""
@@ -621,16 +794,35 @@ elif not universe.READY or FEATURES is None:
     LOG.skipped("E outcomes", "no features")
 else:
     with LOG.phase("E outcomes"):
+        sec_kw = dict(overrides={"max_gap_days": cfg.get("outcomes.sec_max_gap_days", 200)})
         starts = outcomes.starts_from_features(FEATURES)
-        result = outcomes.compute_outcomes(cfg, panel, starts, DELIST)
+        if SEC_PANEL is not None and len(SEC_PANEL) and FEATURES is not FEATURES_V:
+            result = outcomes.compute_outcomes(cfg, SEC_PANEL, starts, DELIST, as_of=SEC_AS_OF, **sec_kw)
+        else:
+            result = outcomes.compute_outcomes(cfg, panel, starts, DELIST)
         br = outcomes.base_rates(result, multiples=(3.0, 10.0))
+        print("A – SEC quarter-end prices (primary):")
         show(br)
         REPORT["base_rates"] = br.round(4).to_dict("records")
         print(f"{len(starts):,} start windows · saved {save_table(result, paths.output / 'outcomes').name}")
         keep = [c for c in ("ticker", "start_date", "horizon_years", "status", "entry_price", "end_multiple",
                             "end_multiple_lower", "end_multiple_upper", "max_multiple", "bucket", "touch_3x",
                             "touch_10x", "delist_category") if c in result.columns]
-        write_workbook(paths.output / "aem_outcomes.xlsx", {"Base rates": br, "Outcomes": result[keep]})
+        sheets_e = {"Base rates A": br, "Outcomes A": result[keep]}
+        if FEATURES_B is not None and len(FEATURES_B):
+            sb = outcomes.starts_from_features(FEATURES_B.assign(in_universe=True))
+            fill_t = set(FEATURES_B.loc[FEATURES_B["panel_b"] == "SEC fill", "ticker"])
+            res_v = outcomes.compute_outcomes(cfg, panel, sb[~sb["ticker"].isin(fill_t)], DELIST_V)
+            dense = secprices.dense_panel(SEC_PANEL, SEC_EVENTS, FTD_PX, fill_t)
+            res_f = outcomes.compute_outcomes(cfg, dense, sb[sb["ticker"].isin(fill_t)], DELIST_B, as_of=as_of, **sec_kw)
+            result_b = pd.concat([res_v, res_f], ignore_index=True)
+            br_b = outcomes.base_rates(result_b, multiples=(3.0, 10.0))
+            print("B – daily vendor closes with the SEC fill (robustness):")
+            show(br_b)
+            REPORT["base_rates_b"] = br_b.round(4).to_dict("records")
+            save_table(result_b, paths.output / "outcomes_b")
+            sheets_e.update({"Base rates B": br_b, "Outcomes B": result_b[[c for c in keep if c in result_b.columns]]})
+        write_workbook(paths.output / "aem_outcomes.xlsx", sheets_e)
 """)
 
 code("""
@@ -649,9 +841,9 @@ md("""
 ## Next steps
 
 1. **Paste the run summary** (the block above) into the chat.
-2. **Verdict "not needed" or "optional":** stay on SimFin + Stooq and report base rates with bounds. **"Recommended":** check EODHD's licence (continued use of downloaded data, publishing derived statistics), then fill only the missing tickers.
+2. **SEC price panel (D10):** quarterly returns agree with the vendors' split-adjusted prices for at least 95% of company-quarters, split detection reaches 90% precision and recall, and the panel prices at least 80% of the listed holes. The vendor panel's EODHD verdict is kept for reference only.
 3. **Pre-lock checks:** every feature known for at least 80% of universe windows, fewer than 25% "unknown" delistings, and a look at the power table. If one fails, the definition is fixed in the config before the lock.
-4. **Lock:** I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp. D7–D9 (regime, its confirmation, unplanned findings) are already settled.
+4. **Lock:** I set `study.status` to final, lock, and commit `LOCK.json` – the public timestamp. D7–D10 (regime, its confirmation, unplanned findings, the SEC price basis) are already settled.
 5. **Next build:** the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark, the placebo.
 """)
 

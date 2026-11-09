@@ -131,3 +131,45 @@ def test_implied_unadjusted_prices_and_value_units():
     bridge = pd.DataFrame({"cusip": ["000123105"], "cik": [1001], "method": ["isin"]})
     at = tf.prices_at(breadth, bridge, ["2016-07-01", "2023-04-03"])
     assert at["price_13f"].tolist() == [10.0]                # one filer is not enough for 2022Q4
+
+
+def _f13_quarter(period: str, filed: str, holdings: dict[int, tuple[str, int, float]]):
+    """subs and infotable rows for one quarter: {filer: (cusip, shares, price)}; values in thousands before 2023."""
+    subs, info = [], []
+    for k, (filer, (cusip, shares, price)) in enumerate(sorted(holdings.items())):
+        acc = f"{filer:010d}-{filed[2:4]}-{k:06d}"
+        subs.append({"ACCESSION_NUMBER": acc, "FILING_DATE": sec_date(filed), "SUBMISSIONTYPE": "13F-HR",
+                     "CIK": filer, "PERIODOFREPORT": sec_date(period)})
+        info.append({"ACCESSION_NUMBER": acc, "NAMEOFISSUER": "ACME CORP", "CUSIP": cusip, "SSHPRNAMTTYPE": "SH",
+                     "SSHPRNAMT": shares, "VALUE": int(round(shares * price / 1000))})
+    return subs, info
+
+
+def test_extract_keeps_share_and_value_sums_and_the_largest_holders(monkeypatch):
+    monkeypatch.setattr(tf, "TOP_HOLDERS", 3)
+    holdings = {900000 + k: ("000123105", 1000 * (k + 1), 10.0) for k in range(5)}
+    subs, info = _f13_quarter("2016-03-31", "2016-05-10", holdings)
+    info.append(dict(info[-1], SSHPRNAMT=500, VALUE=5))           # the largest filer reports a second lot
+    with zipfile.ZipFile(io.BytesIO(f13_zip(subs, info))) as zf:
+        out = tf.extract_file(zf)
+    p = out["prices"].iloc[0]
+    assert p["shares_13f"] == 15_500 and p["value_13f"] == pytest.approx(155_000.0)
+    h = out["holders"]
+    assert list(h["filer_cik"]) == [900004, 900003, 900002] and list(h["shares"]) == [5500.0, 4000.0, 3000.0]
+
+
+def test_a_cache_from_the_old_schema_is_rebuilt_and_holders_load_filtered(tmp_path):
+    subs, info = _f13_quarter("2016-03-31", "2016-05-10",
+                              {900001: ("000123105", 1000, 10.0), 900002: ("000999105", 2000, 5.0)})
+    url = "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/2016q2_form13f.zip"
+    client = FakeClient({url: f13_zip(subs, info)})
+    cache = tmp_path / "form13f"
+    cache.mkdir()
+    (cache / "f13_2016q2.done.json").write_text('{"tables": ["breadth"], "rows": {}}')   # extracted before Nov 8, 2026
+    b, _n, st = tf.load(tmp_path, client=client, today=date(2016, 9, 1), log=None)
+    assert st["downloaded"] == 1 and {"shares_13f", "value_13f"} <= set(b.columns)
+    h = tf.load_holders(tmp_path, cusips=["000123105"])
+    assert list(h["cusip"].unique()) == ["000123105"] and h["shares"].tolist() == [1000.0]
+    again = FakeClient({})
+    _b, _n, st2 = tf.load(tmp_path, client=again, today=date(2016, 9, 1), log=None)
+    assert url not in again.requests and st2["cached"] == 1       # cached under the new schema now

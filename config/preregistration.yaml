@@ -14,7 +14,7 @@
 study:
   id: aem-basestudy
   title: "Base rates for extreme multiples in US small caps, and the information content of AEM screening signals"
-  version: "0.2"
+  version: "0.3"
   status: draft
   author: "Felix D. Langer"
   framework: "AEM-2 v2.6 (the screening terminal's default since Oct 25, 2026)"
@@ -104,14 +104,37 @@ decisions:
       estimate, logged and Brier-scored in the decision log, with no weight in the
       posterior: newly discovered effects are inflated on average (Ioannidis 2008), and
       an inflated likelihood ratio oversizes the bet.
+  - id: D10
+    topic: price basis
+    status: proposed by Claude, confirmed by Felix on Nov 8, 2026 (option A primary, option B the robustness check)
+    decision: >-
+      The first run found about a fifth of the companies in range at the median start
+      date (a third in 2013) missing from SimFin and Stooq – mostly companies that later
+      delisted – and EODHD's personal plans do not cover publishing results. So every
+      price the primary analysis uses now comes from SEC filings (price_basis): quarter-end
+      prices from Form 13F, the SEC fails-to-deliver files where 13F has none, and splits
+      found from the holders' share counts and CUSIP changes. Entry, the size and price
+      filters, the 3-year drawdown and the outcomes use these prices for every company
+      alike, so the companies added back – the ones that later vanished – are measured
+      exactly like the survivors, and the published numbers rest on public data only. A
+      touch is a quarter-end close at or above the multiple (or the last price before a
+      series stops); brief spikes between quarter-ends do not count, so touch rates come
+      out lower than on daily closes, and the ratio between the two is measured on
+      2009-2012 start dates, outside the sample. Robustness B keeps the daily vendor closes
+      and fills only the companies the vendors never priced. Decided before any outcome
+      was computed.
 
 review_before_lock:
   - >-
     Run Phase F of the notebook once (counts only, no returns) and check that each
     feature is known for at least 80% of universe windows from its first formation
     date, and that fewer than 25% of ended series fall into the "unknown" delisting
-    class. Review the power table (smallest detectable likelihood ratio per cohort). If
-    a check fails, fix the definition here before locking.
+    class. Review the power table (smallest detectable likelihood ratio per cohort). For
+    the SEC price panel (D10): quarterly returns agree with the vendors' split-adjusted
+    prices within 10% for at least 95% of company-quarters, split detection reaches 90%
+    precision and recall against the splits the vendors' adjustments imply, and the panel
+    prices at least 80% of the vendor panel's holes that are exchange-listed. If a check
+    fails, fix the definition here before locking.
 
 hypotheses:
   - id: H1
@@ -283,22 +306,98 @@ starts:
 
 price_panel:
   sources: >-
-    SimFin cache first; Stooq for symbols SimFin lacks; EODHD (recommended by the first
-    run's audit, Nov 8, 2026) for listed and delisted common stocks the SEC symbol
-    bridges tie to XBRL filers SimFin lacks. One source per symbol, never mixed inside
-    a series; where EODHD and another source price the same company on a start date,
-    the other source wins.
+    The vendor panel, the basis of robustness B (D10): SimFin cache first; Stooq for
+    symbols SimFin lacks. One source per symbol, never mixed inside a series. EODHD can
+    still fill delisted names for private checks (the notebook's optional step), but its
+    data are not used for published results: its personal plans do not cover publication.
   as_of: >-
     The earliest of the sources' last dates, so a source that ends sooner never looks
     like a wave of delistings.
 
+price_basis:
+  # D10 (Nov 8, 2026): A is primary, B is the robustness check. Code: aem_research.secprices,
+  # aem_research.splits, aem_research.data.ftd.
+  primary: >-
+    A – the SEC price panel. One series per company (CIK): at each quarter-end the median
+    of market value over shares held across the Form 13F filers of the company's main
+    CUSIP (the one most filers hold, kept while it has at least a quarter of the leader's
+    filers), at least three filers; where 13F has none (before the 13F data sets begin in
+    2013, or a thin quarter), the closing price in the SEC fails-to-deliver files dated
+    nearest the quarter-end, within 10 days, of the main CUSIP or an older CUSIP trading
+    under its symbol. Every price is restated in the units after the series' last split.
+    When a series stops before the as-of date, the last fails-to-deliver price within the
+    following quarter is its final price (if at most three times the last quarter-end
+    price). Quarter-end prices are dated the day after the quarter-end, the start date
+    they serve; the close was public on its day, 13F only measures it later.
+  splits: >-
+    A split multiplies every holder's share count by the same ratio. Between consecutive
+    quarter-ends the ten largest 13F holders of the main CUSIP present in both are
+    matched; a split is recorded when at least three are matched, their median share
+    ratio is within 3% of a standard ratio (those companies use: 6:5 to 100:1 forward,
+    1:2 to 1:1000 reverse), at least half of them are within 5% of it, and the ratio is
+    at least 1.2 or at most 1/1.2. Fails-to-deliver prices between two 13F quarters that straddle a
+    split are dropped. Where holders cannot be matched (before 2013), a change of main
+    CUSIP is a split when the last daily price under the old CUSIP over the first under
+    the new one (at most 30 days apart) is within 6% of a standard ratio; a split
+    without a CUSIP change before 2013 cannot be seen (a limit to report).
+  new_series: >-
+    A change of main CUSIP that holders show to be the same security (median ratio within
+    15% of 1) or prices show to be the same (within 25%) continues the series; one that is
+    neither a split nor the same security starts a new series, and so does a gap of more
+    than 200 days (two missing quarters): old equity cancelled in a reorganization is not
+    the new equity.
+  as_of: >-
+    The last quarter-end whose 13F coverage (CUSIPs priced by at least three filers)
+    reaches 90% of the median of the four quarters before it, plus one day.
+  first_formation_date: "2013-07"   # A: the first start date with usable 13F holdings; A's liquidity screen needs them
+  liquidity: >-
+    SEC data have no daily volume, so A replaces the median 20-day dollar volume screen
+    with a minimum number of 13F holders at the latest usable quarter (the breadth rule of
+    features.attention): the threshold k with the highest Youden's J against the
+    dollar-volume screen on the vendor panel's windows that pass every other filter
+    (smallest k on ties, never below 3). Fixed from counts before the lock.
+  listing: >-
+    A company counts as exchange-listed at a start date when a vendor series prices it
+    then (SimFin and Stooq hold exchange-listed stocks), an exchange files Form 25 for it
+    later (it was listed until then), or a symbol the SEC files tie to it is in an
+    exchange folder of the Stooq file.
+  drawdown: 3-year high and drawdown from the panel's quarter-end prices (12 quarter-ends and the entry)
+  delistings: >-
+    A series that stops before the as-of date is classified by the delisting rules on
+    its last price of the day (US$1 test) and its split-adjusted prices (collapse test);
+    the delisting return applies to its last price.
+  robustness_b: >-
+    B – daily closes from the vendor panel (price_panel) with the vendor universe, plus
+    the companies the vendor panel never prices, from the SEC panel with A's filters,
+    measured on quarter-end prices plus the highest fails-to-deliver price of each
+    half-month file (restated for splits; quarters with a split skipped). Start dates
+    from January 2013 for vendor windows, from July 2013 for filled ones.
+  validation: >-
+    Before the lock and without outcomes: quarterly returns of the SEC panel against the
+    vendors' split-adjusted prices for the same company and quarter (agreement within
+    10%), and splits found against the splits the vendors' adjustments imply (13F price
+    ratio over vendor return near a standard ratio): precision and recall. Thresholds in
+    review_before_lock.
+  calibration: >-
+    The ratio of quarter-end to daily touch rates on the vendor panel, for windows that
+    start on the quarterly dates of 2009-2012 (before the sample, so no sample window is
+    computed): vendor tickers priced at US$1 or more with market cap US$100m-2bn (vendor
+    close times vendor shares) and median 20-day dollar volume of at least US$100k. Only
+    the ratios are shown. They translate the study's quarter-end touch rates into daily
+    ones for the terminal.
+
 outcomes:
   horizons_years: [3, 5, 10]
   touch_multiples: [2, 3, 4, 6.24, 10, 100]
-  touch_basis: daily closes on the panel series (SimFin adjusted close, else close; Stooq close), never intraday highs
+  touch_basis: >-
+    A (primary, D10): quarter-end closes of the SEC price panel, plus a series' final
+    price. B (robustness): daily closes on the vendor panel series (SimFin adjusted close,
+    else close; Stooq close), never intraday highs; filled companies as in
+    price_basis.robustness_b.
   end_basis: adjusted close where available, else close
   stale_gap_days: 30           # a series that stops more than this before the window end has ended
   max_gap_days: 120            # a gap this long inside a series ends it (symbol reuse, relisting)
+  sec_max_gap_days: 200        # the SEC panel: one missing quarter does not end a series, two do
   censoring: exclude windows that end after the data as-of date
   # Six-bucket grid from AEM-2 v2.5. Edges are geometric midpoints between grid
   # values; each bucket includes its lower edge.
@@ -404,7 +503,10 @@ features:
       stock for the latest quarter, counting filings filed before the formation date.
     fallback: turnover – median daily volume over shares outstanding, prior 126 trading days
     low: bottom tercile of the measure net of log market cap, per formation date
-    cusip_bridge: SimFin ISIN (a US ISIN carries the CUSIP), then the normalized issuer name
+    cusip_bridge: >-
+      SimFin ISIN (a US ISIN carries the CUSIP), then the issuer CUSIP, then the ticker in
+      the SEC fails-to-deliver files matched to the SEC symbol bridges over overlapping
+      dates (D10), then the normalized issuer name
     rule: >-
       Breadth is the H4 attention signal if it is known for at least 80% of H4
       windows; otherwise turnover is, and breadth is reported as exploratory. Decided
@@ -455,6 +557,8 @@ estimation:
     - without the April and July 2020 start dates, formed at the COVID trough (as AEM-2 v2.6 flags the 2009 trough)
     - multiples in real terms (the touch threshold rises with CPI from entry)
     - insider-sale placebo for H2 (see H2 placebo)
+    - B, the daily vendor closes with the SEC fill (D10, price_basis.robustness_b)
+    - H2 on start dates from 2016 only, where the 3-year drawdown rests on 13F quarter-ends throughout
     - likelihood-ratio intervals with start years resampled as well as firms, because shocks such as 2020-2021 hit many firms at once
   descriptives:
     - the calendar year of each first 3x and 10x touch, to show how much of a base rate comes from one episode such as 2020-2021
@@ -488,10 +592,12 @@ data_sources:
   sec_insider_transactions: "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{year}q{q}_form345.zip"
   sec_form13f: "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/"
   insider_history_start_year: 2009    # Cohen-Malloy-Pomorski needs three prior years of trades
+  sec_fails_to_deliver: "https://www.sec.gov/data/foiadocsfailsdatahtm"   # half-month zips, all securities with fails from Sep 16, 2008
+  sec_fails_start: "200907a"          # 3-year lookbacks for 2013 start dates need 2010 prices
   eodhd:
     secret: EODHD_API_KEY            # Colab secret; never in code or output
     plan: EOD Historical Data – All World, one month
-    use: end-of-day history of listed and delisted US common stocks SimFin lacks; exchange of every US ticker
+    use: optional, private checks only (D10) – end-of-day history of listed and delisted US common stocks SimFin lacks
     licence: >-
       personal plans cover private research and keeping downloaded data; publication is
       a separate use case – confirm with EODHD before Paper B is published

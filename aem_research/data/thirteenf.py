@@ -22,13 +22,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .sec_datasets import F13_PREFIXES, f13_items, parse_dates, process, read_member, to_int, valid_accession
+from .sec_datasets import (F13_PREFIXES, cached_table, f13_items, parse_dates, process, read_member, to_int,
+                           valid_accession)
 
-__all__ = ["F13_PREFIXES", "f13_items", "extract_file", "load", "cusip_bridge", "breadth_at", "prices_at",
-           "quarter_for_formation", "formation_for_quarter", "normalize_name", "normalize_cusip"]
+__all__ = ["F13_PREFIXES", "f13_items", "extract_file", "load", "load_holders", "cusip_bridge", "breadth_at",
+           "prices_at", "quarter_for_formation", "formation_for_quarter", "normalize_name", "normalize_cusip",
+           "SCHEMA", "TOP_HOLDERS"]
 
 VALUE_IN_DOLLARS_FROM = pd.Timestamp("2023-01-03")    # SEC Form 13F readme: VALUE in dollars from this date
 MIN_PRICE_FILERS = 3
+TOP_HOLDERS = 10
+# Fingerprint of what extract_file keeps. A cache extracted under another schema is
+# extracted again (Nov 8, 2026: share and value sums and the top holders were added).
+SCHEMA = "f13-v2-sums-holders10"
 
 _SUFFIX = re.compile(r"\b(INCORPORATED|INC|CORPORATION|CORP|CP|COMPANY|CO|LIMITED|LTD|PLC|LLC|LP|L P|HOLDINGS?|"
                      r"HLDGS?|GROUP|GRP|THE|COM|CL [A-Z]|CLASS [A-Z]|NEW|DEL|SHS|ORD|N V|NV|SA|AG|SE)\b")
@@ -87,10 +93,19 @@ def extract_file(zf: zipfile.ZipFile) -> dict[str, pd.DataFrame]:
     # thousands of dollars on filings before Jan 3, 2023 and in dollars from then on.
     val = pd.to_numeric(h["value"], errors="coerce") * np.where(h["filing_date"] < VALUE_IN_DOLLARS_FROM, 1000.0, 1.0)
     shr = pd.to_numeric(h["sshprnamt"], errors="coerce")
-    px = h.assign(px=val / shr)[(val > 0) & (shr > 0)]
+    px = h.assign(px=val / shr, val=val, shr=shr)[(val > 0) & (shr > 0)]
     prices = (px.groupby(["cusip", "period"], as_index=False)
-              .agg(price_13f=("px", "median"), n_price_filers=("px", "size")))
-    return {"breadth": breadth, "names": names, "prices": prices}
+              .agg(price_13f=("px", "median"), n_price_filers=("px", "size"),
+                   shares_13f=("shr", "sum"), value_13f=("val", "sum")))
+    # The largest holders of each security: a split multiplies every holder's share count
+    # by the same ratio, which is how the SEC price panel finds splits (aem_research.splits).
+    per_filer = (h.assign(shr=shr)[shr > 0].groupby(["cusip", "period", "filer_cik"], as_index=False)["shr"].sum()
+                 .rename(columns={"shr": "shares"}))
+    holders = (per_filer.sort_values(["cusip", "period", "shares", "filer_cik"], ascending=[True, True, False, True],
+                                     kind="mergesort")
+               .groupby(["cusip", "period"], sort=False).head(TOP_HOLDERS).reset_index(drop=True))
+    holders["filer_cik"] = holders["filer_cik"].astype("int64")
+    return {"breadth": breadth, "names": names, "prices": prices, "holders": holders}
 
 
 def load(sec_dir: str | Path, *, client=None, offline: bool = False, today: date | None = None, log=print,
@@ -98,21 +113,53 @@ def load(sec_dir: str | Path, *, client=None, offline: bool = False, today: date
     """(breadth per CUSIP and quarter, issuer names per CUSIP, stats), cached per file.
 
     The breadth table also carries the implied unadjusted quarter-end price (price_13f,
-    median across filers) where at least one filer reported value and shares."""
+    median across filers) where at least one filer reported value and shares, and the
+    shares and market value all filers reported (shares_13f, value_13f). The top holders
+    stay on Drive; `load_holders` reads them for the companies that need them."""
     tables, stats = process(f13_items(today), Path(sec_dir) / "form13f", "f13", extract_file, client=client,
-                            offline=offline, log=log, local_dir=local_dir)
+                            offline=offline, log=log, local_dir=local_dir, schema=SCHEMA, skip_load=("holders",))
     b = tables.get("breadth", pd.DataFrame(columns=["cusip", "period", "n_filers"]))
     if len(b):
         b = b.groupby(["cusip", "period"], as_index=False)["n_filers"].sum()
     p = tables.get("prices")
     if p is not None and len(p) and len(b):
+        # A quarter's filings can sit in two files (late filers): the price comes from the
+        # file with most filers, the share and value sums add up across files.
+        sums = [c for c in ("shares_13f", "value_13f") if c in p.columns]
+        tot = p.groupby(["cusip", "period"], as_index=False)[sums].sum() if sums else None
         p = p.sort_values("n_price_filers", ascending=False, kind="mergesort").drop_duplicates(["cusip", "period"])
+        p = p.drop(columns=sums)
+        if tot is not None:
+            p = p.merge(tot, on=["cusip", "period"], how="left")
         b = b.merge(p, on=["cusip", "period"], how="left")
     n = tables.get("names", pd.DataFrame(columns=["cusip", "name", "n"]))
     if len(n):
         n = (n.groupby(["cusip", "name"], as_index=False)["n"].sum()
              .sort_values(["cusip", "n"], ascending=[True, False]).drop_duplicates("cusip"))
     return b, n[["cusip", "name"]] if len(n) else pd.DataFrame(columns=["cusip", "name"]), stats
+
+
+def load_holders(sec_dir: str | Path, cusips=None) -> pd.DataFrame:
+    """Top holders per CUSIP and quarter (cusip, period, filer_cik, shares) from the cached
+    13F extracts, for the given CUSIPs only; a quarter split across two files keeps each
+    filer once (its position summed), then the largest TOP_HOLDERS."""
+    cols = ["cusip", "period", "filer_cik", "shares"]
+    want = None if cusips is None else set(pd.Series(list(cusips), dtype="object").astype(str))
+
+    def keep(df):
+        df = df[cols]
+        return df[df["cusip"].isin(want)] if want is not None else df
+
+    h = cached_table(Path(sec_dir) / "form13f", "f13", "holders", keep, schema=SCHEMA)
+    if h is None or h.empty:
+        return pd.DataFrame(columns=cols)
+    h["period"] = pd.to_datetime(h["period"]).astype("datetime64[ns]")
+    h = h.groupby(["cusip", "period", "filer_cik"], as_index=False)["shares"].sum()
+    h = (h.sort_values(["cusip", "period", "shares", "filer_cik"], ascending=[True, True, False, True], kind="mergesort")
+         .groupby(["cusip", "period"], sort=False).head(TOP_HOLDERS).reset_index(drop=True))
+    h["filer_cik"] = h["filer_cik"].astype("int64")
+    h["shares"] = h["shares"].astype("float64")
+    return h[cols]
 
 
 def prices_at(breadth: pd.DataFrame, bridge: pd.DataFrame, formation_dates, *,

@@ -36,7 +36,7 @@ import pandas as pd
 SCRATCH = Path(sys.argv[1])
 REPO = Path(sys.argv[2])
 SCENARIO = sys.argv[3] if len(sys.argv) > 3 else "full"
-FULL = SCENARIO in ("full", "locked", "broken", "testsfail", "eodhd")
+FULL = SCENARIO in ("full", "locked", "broken", "testsfail", "eodhd", "secfill")
 DRIVE = SCRATCH / "drive"
 shutil.rmtree(DRIVE, ignore_errors=True)
 rng = np.random.default_rng(42)
@@ -51,18 +51,45 @@ ciks = {t: 100000 + i for i, t in enumerate(tickers)}
 cusips = {t: f"{i + 1:06d}105" for i, t in enumerate(tickers)}
 # 30% delist at random dates 2010-2024; the rest survive
 delist = {t: pd.Timestamp(rng.choice(pd.bdate_range("2010-01-01", "2024-06-30"))) for t in tickers[:90]}
+# Splits (D10 tests): one old share becomes r new shares on the date. Vendor closes are split-adjusted (as
+# SimFin's and Stooq's are); 13F, the fails files and XBRL share counts carry the units of their day.
+SPLITS = {"S101": (pd.Timestamp("2016-05-16"), 2.0), "S102": (pd.Timestamp("2017-08-15"), 2.0),
+          "S103": (pd.Timestamp("2015-11-16"), 3.0), "S104": (pd.Timestamp("2018-08-15"), 0.1),
+          "S105": (pd.Timestamp("2019-02-15"), 0.1)}
+NEW_CUSIP = {"S104": "000105204", "S105": "000106204"}       # reverse splits bring a new CUSIP
+
+
+def later_splits(t, when):
+    """Product of the ratios of splits after `when`: the day's price is the adjusted price times this."""
+    d, r = SPLITS.get(t, (None, 1.0))
+    return r if d is not None and when < d else 1.0
+
+
+def splits_so_far(t, when):
+    """Product of the ratios of splits on or before `when`: a share count of the day is the old count times this."""
+    d, r = SPLITS.get(t, (None, 1.0))
+    return r if d is not None and when >= d else 1.0
+
+
+def cusip_on(t, when):
+    d, _ = SPLITS.get(t, (None, 1.0))
+    return NEW_CUSIP[t] if t in NEW_CUSIP and when >= d else cusips[t]
+
+
 rows = []
 for i, t in enumerate(tickers):
     end = delist.get(t, dates[-1])
     d = dates[dates <= end]
     p = 10 * np.exp(np.cumsum(rng.normal(0.0002, 0.025, len(d))))
+    if SPLITS.get(t, (None, 1.0))[1] < 1:
+        p = p * 10                                             # stays in the size range after a 1-for-10 reverse split
     rows.append(pd.DataFrame({"Ticker": t, "Date": d, "SimFinId": 9000 + i, "Open": p, "High": p * 1.01,
                               "Low": p * 0.99, "Close": p, "Adj. Close": p * 0.97, "Volume": 1e5,
                               "Dividend": np.nan, "Shares Outstanding": 1e7}))
 prices = pd.concat(rows).set_index(["Ticker", "Date"])
 raw = DRIVE / "cvm-research" / "data" / "raw"
 raw.mkdir(parents=True)
-GAP = tickers[:30] if SCENARIO == "eodhd" else []             # delisted names SimFin never had
+GAP = tickers[:30] if SCENARIO in ("eodhd", "secfill") else []   # delisted names SimFin never had
 if SCENARIO != "empty":
     prices.drop(index=GAP, level="Ticker").to_pickle(raw / "us_prices.pkl")
 comp = pd.DataFrame({"Ticker": tickers, "SimFinId": [9000 + i for i in range(n)],
@@ -73,7 +100,7 @@ if SCENARIO == "nocik_nostooq":
     comp = comp.drop(columns=["CIK", "ISIN"])
 if SCENARIO != "empty":
     comp.drop(index=GAP).to_pickle(raw / "us_companies.pkl")
-if GAP:                                                       # an earlier EODHD download, saved on Drive
+if GAP and SCENARIO == "eodhd":                               # an earlier EODHD download, saved on Drive
     sys.path.insert(0, str(REPO))
     from aem_research.io_utils import save_table as _save
     eod_dir = DRIVE / "aem-research" / "cache" / "eodhd"
@@ -198,12 +225,12 @@ if FULL:
                                  ("OperatingIncomeLoss", "opinc"), ("DepreciationDepletionAndAmortization", "dna")):
                     nums.append(num_row(adsh, tag, f"{P_:%Y%m%d}", q, round(float(flows[key][ytd].sum()), 0)))
                 nums.append(num_row(adsh, "WeightedAverageNumberOfDilutedSharesOutstanding", f"{P_:%Y%m%d}",
-                                    1 if k < 4 else 4, round(float(wad[P_]), 0), "shares"))
+                                    1 if k < 4 else 4, round(float(wad[P_] * splits_so_far(t, filed)), 0), "shares"))
             nums += [num_row(adsh, "CashAndCashEquivalentsAtCarryingValue", f"{P:%Y%m%d}", 0,
                              round(float(rng.uniform(5e6, 6e7)), 0)),
                      num_row(adsh, "LongTermDebt", f"{P:%Y%m%d}", 0, round(float(rng.uniform(0, 5e7)), 0)),
                      num_row(adsh, "EntityCommonStockSharesOutstanding", f"{filed + pd.offsets.MonthEnd(0):%Y%m%d}",
-                             0, round(float(wad[P]), 0), "shares", version="dei/2014")]
+                             0, round(float(wad[P] * splits_so_far(t, filed)), 0), "shares", version="dei/2014")]
             if k == 4:
                 nums.append(num_row(adsh, "EntityPublicFloat", f"{P - pd.DateOffset(months=6) + pd.offsets.MonthEnd(0):%Y%m%d}",
                                     0, round(float(wad[P] * 8), 0), version="dei/2014"))
@@ -255,6 +282,7 @@ if FULL:
     f13_files: dict = {}
     periods = pd.date_range("2013-03-31", "2025-09-30", freq="QE")
     closes = prices["Close"]
+    holds = np.random.default_rng(13).random((25, n))          # who holds what: stable across quarters
 
     def close_at(t, when):
         s = closes.loc[t]
@@ -272,15 +300,41 @@ if FULL:
             for i, t in enumerate(tickers):
                 if P > delist.get(t, pd.Timestamp("2030-01-01")):
                     continue
-                if rng.random() < 0.2 + 0.6 * (i % 10) / 10:
-                    close = float(close_at(t, P))                  # the unadjusted quarter-end close
-                    value = close * 100_000 / (1000.0 if filed < pd.Timestamp("2023-01-03") else 1.0)
-                    f13_files[lab][1].append({"ACCESSION_NUMBER": a, "NAMEOFISSUER": f"{t} CORP", "CUSIP": cusips[t],
-                                              "SSHPRNAMT": 100_000, "VALUE": int(round(value)),
-                                              "SSHPRNAMTTYPE": "SH", "TITLEOFCLASS": "COM"})
+                rng.random()                                   # drawn as before, so the rest of the stream is unchanged
+                if holds[f, i] < 0.2 + 0.6 * (i % 10) / 10:
+                    close = float(close_at(t, P)) * later_splits(t, P)  # the unadjusted quarter-end close
+                    shares = (100_000 + 1_000 * f) * splits_so_far(t, P)
+                    value = close * shares / (1000.0 if filed < pd.Timestamp("2023-01-03") else 1.0)
+                    f13_files[lab][1].append({"ACCESSION_NUMBER": a, "NAMEOFISSUER": f"{t} CORP",
+                                              "CUSIP": cusip_on(t, P), "SSHPRNAMT": int(round(shares)),
+                                              "VALUE": int(round(value)), "SSHPRNAMTTYPE": "SH", "TITLEOFCLASS": "COM"})
     for lab, (s_, i_) in f13_files.items():
         (manual / f"{lab}_form13f.zip").write_bytes(f13_zip(s_, i_))
-    print(f"SEC data sets: {len(fs_files)} XBRL, {len(ins_files)} insider, {len(f13_files)} 13F zips")
+
+    # SEC fails-to-deliver files, half-month zips as saved by hand: a third of the days carry a fail;
+    # the price is the previous day's close of the day (not split-adjusted).
+    frng = np.random.default_rng(77)
+    ftd_rows = []
+    for i, t in enumerate(tickers):
+        sub = closes.loc[t]
+        sub = sub[sub.index >= pd.Timestamp("2009-06-01")]
+        raw_ = sub.to_numpy() * np.array([later_splits(t, x) for x in sub.index])
+        settle = sub.index[1:]
+        prev_close = raw_[:-1]
+        pick = frng.random(len(settle)) < 0.35
+        for d_, px_ in zip(settle[pick], prev_close[pick]):
+            ftd_rows.append((d_, cusip_on(t, d_), t, int(frng.integers(100, 50_000)), f"{t} CORP", round(float(px_), 2)))
+    ftd = pd.DataFrame(ftd_rows, columns=["d", "cusip", "symbol", "qty", "desc", "price"])
+    ftd["lab"] = ftd["d"].dt.strftime("%Y%m") + np.where(ftd["d"].dt.day <= 15, "a", "b")
+    for lab, g in ftd.groupby("lab"):
+        lines = ["SETTLEMENT DATE|CUSIP|SYMBOL|QUANTITY (FAILS)|DESCRIPTION|PRICE"]
+        lines += [f"{r.d:%Y%m%d}|{r.cusip}|{r.symbol}|{r.qty}|{r.desc}|{'.' if r.Index % 53 == 0 else f'{r.price:.2f}'}"
+                  for r in g.itertuples()]
+        lines.append(f"Trailer record count {len(g)}")
+        with zipfile.ZipFile(manual / f"cnsfails{lab}.zip", "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"cnsfails{lab}.txt", "\n".join(lines) + "\n")
+    print(f"SEC data sets: {len(fs_files)} XBRL, {len(ins_files)} insider, {len(f13_files)} 13F zips, "
+          f"{ftd['lab'].nunique()} fails-to-deliver files")
 
     # FRED series as saved by hand (fred.stlouisfed.org download button: <SERIES>.csv)
     fred_dir = DRIVE / "aem-research" / "data" / "fred"
@@ -371,9 +425,16 @@ if SCENARIO == "broken":
 elif FULL:
     assert "ERRORS    none" in summary_text and "WARNING" not in summary_text, "unexpected problems in a clean run"
     assert "S1 GAPS   s1_unknown" in summary_text, "the S1 breakdown is missing"
+if FULL:
+    import re
+    assert "SEC PANEL " in summary_text and "basis SEC panel (A)" in summary_text, "the SEC price panel is not primary"
+    n_split = int(re.search(r"SPLITS    from_holders (\d+)", summary_text).group(1))
+    assert n_split >= 4, f"splits from holders: {n_split} (5 planted)"
+    assert "split_precision 100.0% ok" in summary_text and "split_recall 100.0% ok" in summary_text, "split check"
+    assert "ROBUST B  " in summary_text and "CALIB" in summary_text
 if SCENARIO == "eodhd":
     from aem_research.io_utils import load_table
-    feats = load_table(DRIVE / "aem-research" / "cache" / "features")
+    feats = load_table(DRIVE / "aem-research" / "cache" / "features_vendor")    # EODHD fills the vendor panel (B)
     eod = feats[feats["ticker"].astype(str).str.endswith("~eod")]
     import re
     n_eod = int(re.search(r"tickers_with_prices (\d+)", summary_text).group(1))
@@ -381,6 +442,15 @@ if SCENARIO == "eodhd":
     assert eod["ticker"].nunique() >= 20 and eod["in_universe"].any(), "EODHD names did not reach the universe"
     print(f"EODHD gap-fill: {eod['ticker'].nunique()} names back in the panel, "
           f"{int(eod['in_universe'].sum())} universe windows")
+if SCENARIO == "secfill":
+    from aem_research.io_utils import load_table
+    feats = load_table(DRIVE / "aem-research" / "cache" / "features")
+    gap_ciks = {ciks[t] for i, t in enumerate(GAP) if i % 50}
+    got = set(feats.loc[feats["in_universe"], "cik"].dropna().astype("int64")) & gap_ciks
+    fill = int(re.search(r"sec_fill_windows (\d+)", summary_text).group(1))
+    assert len(got) >= 10 and fill > 0, (len(got), fill)
+    assert "holes_priced 100.0% ok" in summary_text or "holes_priced 9" in summary_text, "holes priced check"
+    print(f"SEC fill: {len(got)} companies SimFin never had are in universe A; B fills {fill} windows")
 if SCENARIO == "locked":
     out = ns["result"]
     assert len(out) and set(out["status"]) <= {"complete", "delisted", "series_ended", "censored", "no_entry"}
