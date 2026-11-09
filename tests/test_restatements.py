@@ -83,3 +83,20 @@ def test_corrections_and_amendments_say_nothing():
         return int(((o["kind"] == "same") & (o["lo"] < split) & (o["hi"] > split)).sum())
     assert across(rs.observations(g2, subs)) == 0
     assert across(rs.observations(g2)) > 0          # the amendment's old numbers would deny the split
+
+
+def test_balance_sheet_counts_left_as_first_reported_never_deny_a_split():
+    # restated earnings-per-share denominators, but the balance sheet shows earlier counts as first reported
+    split = pd.Timestamp("2015-08-20")
+    f = filings(9, splits=[(split, 2.0)])
+    old = (f["tag"] == "CommonStockSharesOutstanding") & (f["filed"] > split) & (f["ym"] < _ym("2015-08-31"))
+    f.loc[old, "value"] /= 2.0
+    o = rs.observations(f)
+    bs_same_across = ((o["kind"] == "same") & ((o["key"] % 8) >= rs.N_WAD) & (o["lo"] < split) & (o["hi"] > split))
+    assert bs_same_across.sum() > 0                          # the balance sheet alone would say "no split"
+    ev, spans, info = rs.evidence(f)
+    assert len(ev) == 1 and ev.iloc[0]["ratio"] == pytest.approx(2.0) and info["obs_same_wad"] < info["obs_same"]
+    x = rs.index(ev, spans)
+    for q0, q1 in (("2015-06-30", "2015-09-30"), ("2015-03-31", "2015-06-30"), ("2015-09-30", "2015-12-31")):
+        assert not rs.no_split(x, 9, q0, q1) or pd.Timestamp(q1) < ev.iloc[0]["lo"] or pd.Timestamp(q0) >= ev.iloc[0]["hi"]
+    assert rs.no_split(x, 9, "2014-09-30", "2014-12-31")      # well before the split: the history is clean

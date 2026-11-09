@@ -15,10 +15,11 @@ def paste_block(report: dict) -> str:
     r = report
     v = r.get("verdict") or {}
     f = r.get("features") or {}
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
     lines = [
-        "AEM RUN SUMMARY – paste everything between the rulers into the chat",
+        f"AEM RUN SUMMARY {v_} – paste everything between the rulers into the chat",
         "=" * 72,
-        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
+        f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
         f"· config {str(r.get('config_sha256', ''))[:12]} "
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
     ]
@@ -109,10 +110,11 @@ def _items(d: dict) -> str:
 def paper_a_block(report: dict) -> str:
     """Paper A's paste block: inputs, search, deals, entry coverage, exit routes, WSIB – counts only."""
     r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
     lines = [
-        "PAPER A RUN SUMMARY – paste everything between the rulers into the chat",
+        f"PAPER A RUN SUMMARY {v_} – paste everything between the rulers into the chat",
         "=" * 72,
-        f"run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
+        f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook {r.get('notebook_build', 'n/a')} "
         f"· config A {str(r.get('config_sha256', ''))[:12]} "
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
     ]

@@ -25,7 +25,9 @@ def code(text):
 
 
 md("""
-# AEM – 03 universe A diagnostic (counts only)
+# AEM – 03 universe A diagnostic (counts only) · v__RELEASE__
+
+**Version v__RELEASE__.** The paste block's first line repeats it; an older open copy stops at setup and names the current version.
 
 **Why this exists.** The Nov 9, 2026 run of notebook 01 left universe A (the SEC price panel) with 147 windows, where the vendor universe B has about 40,000 on the same dates. This notebook finds which filter removes the companies, from the tables notebook 01 already saved on Drive. It downloads nothing and takes about two minutes.
 
@@ -84,12 +86,14 @@ COMMIT = _git("-C", REPO_DIR, "rev-parse", "--short", "HEAD").stdout.strip() or 
 # a hash of this notebook's cells, set by its builder: an older copy (Colab keeps an opened
 # notebook as it was) would run the newest code with old steps, so it stops here instead
 NOTEBOOK_BUILD = "__BUILD__"
+NOTEBOOK_RELEASE = __RELEASE__
 from aem_research.env import check_notebook_fresh
-check_notebook_fresh(REPO_DIR, "03_universe_a_diagnostic.ipynb", NOTEBOOK_BUILD,
+check_notebook_fresh(REPO_DIR, "03_universe_a_diagnostic.ipynb", NOTEBOOK_BUILD, release=NOTEBOOK_RELEASE,
                      colab_url="https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb")
 cfg = load_config(os.path.join(REPO_DIR, "config", "preregistration.yaml"))
 paths = resolve_paths(DRIVE_ROOT, cfg.get("data_sources.simfin_cache_dirs"))
-print(f"aem_research {aem_research.__version__} @ {COMMIT} · pandas {pd.__version__} · numpy {np.__version__}")
+print(f"Notebook 03 · v{NOTEBOOK_RELEASE} · aem_research {aem_research.__version__} @ {COMMIT} · "
+      f"pandas {pd.__version__} · numpy {np.__version__}")
 """)
 
 code("""
@@ -141,8 +145,8 @@ def _fmt(d):
     return " · ".join(f"{k} {f'{v:.1%}' if isinstance(v, float) and abs(v) <= 1 else v}" for k, v in d.items())
 
 
-lines = ["AEM DIAGNOSTIC 03 – paste everything between the rulers into the chat", "=" * 72,
-         f"repo {COMMIT} · notebook {NOTEBOOK_BUILD} · pandas {pd.__version__} · numpy {np.__version__} · "
+lines = [f"AEM DIAGNOSTIC 03 v{NOTEBOOK_RELEASE} – paste everything between the rulers into the chat", "=" * 72,
+         f"v{NOTEBOOK_RELEASE} · repo {COMMIT} · notebook {NOTEBOOK_BUILD} · pandas {pd.__version__} · numpy {np.__version__} · "
          f"notebook 01 run {REP.get('generated_utc', 'n/a')} "
          f"(repo {REP.get('repo_commit', 'n/a')}) · holders minimum {K}",
          "FUNNEL A  " + _fmt(dg.funnel_summary(FUN_A)),
@@ -174,6 +178,11 @@ def to_source(text):
 
 # the build stamp: a hash of every cell with the placeholder in place, so it is reproducible
 import hashlib  # noqa: E402
+import re  # noqa: E402
+# the release number (aem_research.RELEASE) goes into the cells first, so the stamp changes with it
+_REL = re.search(r"^RELEASE = (\d+)", (Path(__file__).resolve().parents[1] / "aem_research" / "__init__.py")
+                 .read_text(encoding="utf-8"), re.M).group(1)
+CELLS = [(kind, text.replace("__RELEASE__", _REL)) for kind, text in CELLS]
 _BUILD = hashlib.sha256("\x1e".join(text for _, text in CELLS).encode("utf-8")).hexdigest()[:12]
 CELLS = [(kind, text.replace("__BUILD__", _BUILD)) for kind, text in CELLS]
 

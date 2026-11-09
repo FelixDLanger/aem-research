@@ -36,7 +36,9 @@ def phase(name, body, before="", after=""):
 
 
 md("""
-# AEM base-rate study – 01 coverage audit and point-in-time features
+# AEM base-rate study – 01 coverage audit and point-in-time features · v__RELEASE__
+
+**Version v__RELEASE__.** The paste block's first line repeats it; an older open copy stops at setup and names the current version.
 
 **What this does.** Builds the study's primary price basis from SEC filings alone (D10: 13F quarter-end prices, the SEC fails-to-deliver files, splits found from the holders' share counts), checks the SimFin cache and the Stooq bulk file as the robustness panel (B), builds the point-in-time features from the SEC's free data sets and the macro regime variables from FRED, and saves everything to Drive, including an Excel workbook. The outcome engine is built and tested, but stays locked until the pre-registration is locked.
 
@@ -108,10 +110,12 @@ COMMIT = _git("-C", REPO_DIR, "rev-parse", "--short", "HEAD").stdout.strip() or 
 # a hash of this notebook's cells, set by its builder: an older copy (Colab keeps an opened
 # notebook as it was) would run the newest code with old steps, so it stops here instead
 NOTEBOOK_BUILD = "__BUILD__"
+NOTEBOOK_RELEASE = __RELEASE__
 from aem_research.env import check_notebook_fresh
-check_notebook_fresh(REPO_DIR, "01_aem_base_rate_skeleton.ipynb", NOTEBOOK_BUILD,
+check_notebook_fresh(REPO_DIR, "01_aem_base_rate_skeleton.ipynb", NOTEBOOK_BUILD, release=NOTEBOOK_RELEASE,
                      colab_url="https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb")
-print(f"aem_research {aem_research.__version__} @ {COMMIT} · pandas {pd.__version__} · Colab: {IN_COLAB}")
+print(f"Notebook 01 · v{NOTEBOOK_RELEASE} · aem_research {aem_research.__version__} @ {COMMIT} · "
+      f"pandas {pd.__version__} · Colab: {IN_COLAB}")
 """)
 
 code("""
@@ -123,7 +127,8 @@ LOG = RunLog()
 cfg = load_config(os.path.join(REPO_DIR, "config", "preregistration.yaml"))
 print(cfg.summary())
 REPORT = {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-          "repo_commit": COMMIT, "notebook_build": NOTEBOOK_BUILD, "config_sha256": cfg.sha256,
+          "repo_commit": COMMIT, "notebook_build": NOTEBOOK_BUILD, "release": NOTEBOOK_RELEASE,
+          "config_sha256": cfg.sha256,
           "lock_status": cfg.status, "versions": versions()}
 """)
 
@@ -448,7 +453,7 @@ else:
 md("""
 ## Phase F – SEC price panel (the primary price basis, D10)
 
-Every price the primary analysis uses comes from SEC filings, so the companies that later delisted are priced exactly like the survivors and the published numbers rest on public data. Each company gets one quarter-end price per quarter: the median of market value over shares held across the 13F filers of its main CUSIP (at least three), else the fails-to-deliver close nearest the quarter-end. Splits are found from the filings' restated history (after a split, every later 10-Q and 10-K restates past share counts by exactly the split ratio), from the holders' share counts (a split multiplies every holder's shares by the same ratio) and from CUSIP changes, and prices are restated in the units after the last split. A jump up whose reverse split is certain but whose ratio nothing gives is neutralized, so it cannot count as a gain. Counts only – no returns.
+Every price the primary analysis uses comes from SEC filings, so the companies that later delisted are priced exactly like the survivors and the published numbers rest on public data. Each company gets one quarter-end price per quarter: the median of market value over shares held across the 13F filers of its main CUSIP (at least three), else the fails-to-deliver close nearest the quarter-end. Splits are found from the filings' restated history (after a split, every later 10-Q and 10-K restates past share counts by exactly the split ratio), from the holders' share counts (a split multiplies every holder's shares by the same ratio) and from CUSIP changes, and prices are restated in the units after the last split. A jump up that both the filings and the holders show to be a reverse split of unknown ratio, or a rise no stock makes in a quarter (twentyfold), is neutralized, so it cannot count as a gain. Counts only – no returns.
 """)
 
 phase("F SEC prices", before="""
@@ -457,7 +462,7 @@ from aem_research import fundamentals as fu, restatements, secprices
 from aem_research.data import ftd
 
 SEC_PANEL, SEC_EVENTS, SEC_BRIDGE, SEC_AS_OF, FTD_PX, SEC_INFO = None, None, None, None, None, {}
-SEC_FILINGS = SEC_RESTATED = None
+SEC_FILINGS = SEC_RESTATED = SEC_HOLDERS = None
 """, body="""
 if f13_breadth is None or not len(f13_breadth) or "price_13f" not in f13_breadth.columns:
     print("No 13F prices on Drive – the SEC panel (option A) is skipped; the vendor panel stands in.")
@@ -492,10 +497,15 @@ elif SEC_BRIDGE is not None:
               f"{rst_info['obs_split']:,} a split, {rst_info['obs_other']:,} neither) · {rst_info['events']:,} splits "
               f"at {rst_info['companies_with_events']:,} companies ({rst_info['events_two_periods']:,} seen in two or "
               f"more periods)")
+    # the holders' share ratios between consecutive quarters: split evidence here, and the check on the
+    # vendors' moves in the validation (a split moves every holder's count; a spin-off moves none)
+    SEC_HOLDERS = secprices.holder_table(mains, holders, as_of_period=as_of_q,
+                                         max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200))
     SEC_PANEL, SEC_EVENTS, SEC_INFO = secprices.build_panel(mains, holders, FTD_PX, SEC_BRIDGE, as_of_period=as_of_q,
                                                             ftd_names=FTD_NAMES,
                                                             max_gap_days=cfg.get("outcomes.sec_max_gap_days", 200),
-                                                            dei=SEC_FILINGS, restated=SEC_RESTATED)
+                                                            dei=SEC_FILINGS, restated=SEC_RESTATED,
+                                                            holder_tab=SEC_HOLDERS)
     del holders, mains
     SEC_AS_OF = secprices.as_of_date(as_of_q)
     save_table(SEC_PANEL, paths.cache / "sec_panel")
@@ -517,7 +527,9 @@ elif SEC_BRIDGE is not None:
                         "at_cusip_changes": SEC_INFO["splits_cusip"], "from_filings": SEC_INFO["splits_filings"],
                         "from_few_holders": SEC_INFO["splits_few_holders"],
                         "from_holders_median": SEC_INFO["splits_holders_median"],
-                        "neutralized": SEC_INFO["splits_neutralized"],
+                        "neutralized": SEC_INFO["splits_neutralized"], "implausible": SEC_INFO["splits_implausible"],
+                        "forward_without_price": SEC_INFO["holder_splits_forward_no_price"],
+                        "cusip_switch_counts_known": SEC_INFO["cusip_switch_counts_known"],
                         "holder_splits_rejected": SEC_INFO["holder_splits_rejected"],
                         "refuted_by_restated": f"holders {SEC_INFO['holder_splits_refuted_restated']}, "
                                                f"CUSIP changes {SEC_INFO['cusip_splits_refuted_restated']}, "
@@ -673,8 +685,13 @@ else:
               f"{b_min:.0%} of universe A's windows (it prices {REPORT['universe_b']['vendor_coverage_first_date']:.0%} "
               f"at A's first date)")
         # ---- checks on the SEC panel, before the lock and without outcomes ----
+        # the study's population: each company's first and last start date in universe A
+        pop = (FEATURES[FEATURES["in_universe"] & (FEATURES["start_date"] >= first_a)].dropna(subset=["cik"])
+               .assign(cik=lambda d: pd.to_numeric(d["cik"]).astype("int64"))
+               .groupby("cik")["start_date"].agg(first="min", last="max").reset_index())
         SEC_CHECK, SPLIT_CASES = secprices.validate(SEC_PANEL, SEC_EVENTS, panel, keys, filings=SEC_FILINGS,
-                                                    restated=SEC_RESTATED, return_cases=True)
+                                                    restated=SEC_RESTATED, holders=SEC_HOLDERS, population=pop,
+                                                    return_cases=True)
         REPORT["split_cases"] = secprices.case_lines(SPLIT_CASES, per_category=4)
         if len(SPLIT_CASES):
             print("Split check – cases to look at (counts and prices only):")
@@ -727,9 +744,11 @@ else:
     unk = REPORT["delistings"].get("share_unknown", 0.0)
     PRELOCK["delisting_unknown"] = f"{unk:.1%} {'ok' if unk < 0.25 else 'ABOVE 25%'}"
     if SEC_CHECK:
+        # on the study's population (companies in universe A, three years before their first start date to
+        # ten after their last; amended Nov 9, 2026), the whole SEC panel where that is not known
         for name, key, bar in (("sec_returns_agree", "returns_agree", 0.95), ("split_precision", "split_precision", 0.9),
                                ("split_recall", "split_recall", 0.9), ("holes_priced", "holes_priced", 0.8)):
-            v = SEC_CHECK.get(key)
+            v = SEC_CHECK.get(f"{key}_universe", SEC_CHECK.get(key))
             PRELOCK[name] = "n/a" if v is None else f"{v:.1%} {'ok' if v >= bar else f'BELOW {bar:.0%}'}"
     PRELOCK["universe_windows"] = int(len(uni))
     PRELOCK["h2a_cohort_windows"] = int(uni["h2a"].fillna(False).sum())
@@ -925,6 +944,11 @@ def to_source(text):
 
 # the build stamp: a hash of every cell with the placeholder in place, so it is reproducible
 import hashlib  # noqa: E402
+import re  # noqa: E402
+# the release number (aem_research.RELEASE) goes into the cells first, so the stamp changes with it
+_REL = re.search(r"^RELEASE = (\d+)", (Path(__file__).resolve().parents[1] / "aem_research" / "__init__.py")
+                 .read_text(encoding="utf-8"), re.M).group(1)
+CELLS = [(kind, text.replace("__RELEASE__", _REL)) for kind, text in CELLS]
 _BUILD = hashlib.sha256("\x1e".join(text for _, text in CELLS).encode("utf-8")).hexdigest()[:12]
 CELLS = [(kind, text.replace("__BUILD__", _BUILD)) for kind, text in CELLS]
 

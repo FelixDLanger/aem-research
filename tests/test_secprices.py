@@ -241,13 +241,17 @@ def test_filings_decide_a_cusip_change_the_prices_alone_cannot():
 
     c12, cus12, pts12 = changed(12, 1 / 9)          # 1-for-9: a standard ratio, not a common one
     c13, cus13, pts13 = changed(13, 0.1)            # 1-for-10 by price, but the share count did not move
-    px = _px(pts12 + pts13)
+    c18, cus18, pts18 = changed(18, 0.1)            # 1-for-10 by price, no counts known: the switch decides
+    px = _px(pts12 + pts13 + pts18)
+    # counts known, but no restated history: neither the switch nor the counts set the ratio (since Nov 9:
+    # both were off for 86% of such splits) – old equity and new start separate series
     dei = pd.concat([_dei(12, 5.4e7, 6e6), _dei(13, 5e7, 5e7)], ignore_index=True)
-    panel, ev, info = _build({12: (*c12, cus12), 13: (*c13, cus13)}, ftd_px=px, dei=dei)
-    sp12 = ev[(ev["cik"] == 12) & (ev["kind"] == "split")]
-    assert len(sp12) == 1 and sp12.iloc[0]["evidence"] == "CUSIP change + filings"
-    assert abs(sp12.iloc[0]["ratio"] - 1 / 9) < 1e-9 and set(panel.loc[panel["cik"] == 12, "ticker"]) == {"CIK12"}
-    assert set(panel.loc[panel["cik"] == 13, "ticker"]) == {"CIK13", "CIK13~2"}   # not the same equity: new series
+    panel, ev, info = _build({12: (*c12, cus12), 13: (*c13, cus13), 18: (*c18, cus18)}, ftd_px=px, dei=dei)
+    assert set(panel.loc[panel["cik"] == 12, "ticker"]) == {"CIK12", "CIK12~2"}
+    assert set(panel.loc[panel["cik"] == 13, "ticker"]) == {"CIK13", "CIK13~2"}
+    assert info["cusip_switch_counts_known"] == 2
+    sp18 = ev[(ev["cik"] == 18) & (ev["kind"] == "split")]
+    assert len(sp18) == 1 and sp18.iloc[0]["evidence"] == "CUSIP change" and sp18.iloc[0]["ratio"] == pytest.approx(0.1)
     _p, ev0, _i = _build({12: (*c12, cus12)}, ftd_px=_px(pts12))                  # prices alone: 1-for-9 is too rare
     assert (ev0["kind"] == "new series").sum() == 1 and (ev0["kind"] == "split").sum() == 0
 
@@ -337,9 +341,9 @@ def test_restated_history_sets_the_ratio_where_prices_and_counts_both_shrink_it(
                  lambda k, j: 1, filers=NOBODY)
     px = _px([(old, "2014-02-14", 0.82), (new, "2014-03-10", 4.1)])
     dei = _dei(20, 5e7, 1e7)
-    _p, ev0, _i = _build({20: (*c, [old, new])}, ftd_px=px, dei=dei)
-    s0 = ev0[ev0["kind"] == "split"]
-    assert len(s0) == 1 and s0.iloc[0]["ratio"] == pytest.approx(0.2) and s0.iloc[0]["evidence"] == "CUSIP change + filings"
+    p0_, ev0, _i = _build({20: (*c, [old, new])}, ftd_px=px, dei=dei)
+    # without the restated history: no ratio from the switch or the counts (both say 1-for-5) – a new series
+    assert (ev0["kind"] == "split").sum() == 0 and set(p0_["ticker"]) == {"CIK20", "CIK20~2"}
     doubled = lambda d: 5e7 * (2.0 if pd.Timestamp(d) >= pd.Timestamp("2014-03-15") else 1.0)  # noqa: E731
     panel, ev, info = _build({20: (*c, [old, new])}, ftd_px=px, dei=dei, restated=_restated((20, 0.1, doubled)))
     s1 = ev[ev["kind"] == "split"]
@@ -384,15 +388,19 @@ def test_restated_history_without_a_split_overrules_the_holders():
     assert (ev["kind"] == "split").sum() == 0 and info["holder_splits_refuted_restated"] == 1
 
 
-def test_a_jump_with_the_count_collapsed_is_neutralized_and_one_the_filings_restate_nothing_for_is_real():
-    jump = _company(lambda k: "SSS000024", lambda k: 0.255 if k < 4 else 1.66, lambda k, j: 1, filers=NOBODY)
-    panel, ev, info = _build({24: (*jump, ["SSS000024"])}, dei=_dei(24, 5e7, 5.35e5))
+def test_a_jump_is_neutralized_only_on_two_records_or_when_no_stock_moves_like_it():
+    jump = lambda k: 0.255 if k < 4 else 1.66                           # noqa: E731 – up 6.5x in one quarter
+    # the filings' count fell 99%, nothing else: not enough (counts jump with unit errors and reverse mergers)
+    alone = _company(lambda k: "SSS000024", jump, lambda k, j: 1, filers=NOBODY)
+    _p, ev0, info0 = _build({24: (*alone, ["SSS000024"])}, dei=_dei(24, 5e7, 5.35e5))
+    assert (ev0["kind"] == "split").sum() == 0 and info0["unexplained_jumps"] == 1
+    # the holders' median fell to 0.3 as well (no common ratio within 8%): a reverse split of unknown ratio
+    both = _company(lambda k: "SSS000027", jump, lambda k, j: (4000 + j) * (0.3 * BLUR[j] if k >= 4 else 1))
+    panel, ev, info = _build({27: (*both, ["SSS000027"])}, dei=_dei(27, 5e7, 5.35e5))
     s = ev[ev["kind"] == "split"]
     assert len(s) == 1 and s.iloc[0]["evidence"] == "unresolved jump" and info["splits_neutralized"] == 1
     p = panel.set_index("period")["price"]
     assert p[PERIODS[4]] / p[PERIODS[3]] == pytest.approx(1.66 / 0.255 / 7)   # undone: about flat, never 6.5x
-    _p, _e, info0 = _build({24: (*jump, ["SSS000024"])})
-    assert info0["unexplained_jumps"] == 1 and info0["splits_neutralized"] == 0   # no evidence of a split: left
     # a real tripling; the holders' median halves (profit taking, 40% agree)
     real = _company(lambda k: "TTT000025", lambda k: 10.0 if k < 4 else 30.0,
                     lambda k, j: (3000 + j) * (0.5 * BLUR[j] if k >= 4 else 1))
@@ -401,6 +409,48 @@ def test_a_jump_with_the_count_collapsed_is_neutralized_and_one_the_filings_rest
     panel2, ev2, info2 = _build({25: (*real, ["TTT000025"])}, restated=_restated((25, None, None)))
     assert (ev2["kind"] == "split").sum() == 0 and info2["jumps_restated_no_split"] == 1
     assert panel2.set_index("period")["price"][PERIODS[4]] == 30.0
+    # 624-fold with nothing restated and the holders unchanged: a 13F unit error, not a move
+    error = _company(lambda k: "VVV000028", lambda k: 0.319 if k < 4 else 199.0, lambda k, j: 2000 + j)
+    panel3, ev3, info3 = _build({28: (*error, ["VVV000028"])}, restated=_restated((28, None, None)))
+    s3 = ev3[ev3["kind"] == "split"]
+    assert len(s3) == 1 and s3.iloc[0]["evidence"] == "implausible jump" and info3["splits_implausible"] == 1
+    p3 = panel3.set_index("period")["price"]
+    assert p3[PERIODS[4]] / p3[PERIODS[3]] == pytest.approx(199.0 / 0.319 / 1000)   # the unit undone, the move kept
+    forty = _company(lambda k: "VVV000032", lambda k: 1.0 if k < 4 else 40.0, lambda k, j: 2000 + j)
+    panel4, ev4, _i = _build({32: (*forty, ["VVV000032"])})
+    p4 = panel4.set_index("period")["price"]
+    assert ev4.iloc[0]["evidence"] == "implausible jump" and p4[PERIODS[4]] == pytest.approx(p4[PERIODS[3]])
+
+
+def test_a_forward_split_from_holders_alone_needs_the_price_or_the_restated_history():
+    # every holder's count grows a quarter – a 5:4 split, or a 25% share issuance index funds follow
+    grow = lambda k, j: (1000 + 10 * j) * (1.25 if k >= 4 else 1)        # noqa: E731
+    flat = _company(lambda k: "WWW000029", lambda k: 20.0, grow)
+    _p, ev, info = _build({29: (*flat, ["WWW000029"])})
+    assert (ev["kind"] == "split").sum() == 0 and info["holder_splits_forward_no_price"] == 1
+    _p, ev, info = _build({29: (*flat, ["WWW000029"])}, restated=_restated((29, 1.25, None)))
+    assert ev.iloc[0]["evidence"] == "holders" and ev.iloc[0]["ratio"] == 1.25        # the filings restated it
+    fell = _company(lambda k: "WWW000030", lambda k: 20.0 if k < 4 else 16.4, grow)
+    _p, ev, info = _build({30: (*fell, ["WWW000030"])})
+    assert ev.iloc[0]["evidence"] == "holders" and ev.iloc[0]["ratio"] == 1.25        # the price moved with it
+
+
+def test_the_holder_table_is_shared_with_the_panel():
+    c = _company(lambda k: "XXX000031", lambda k: (10 + k) if k < 4 else (10 + k) / 2,
+                 lambda k, j: (1000 + 10 * j) * (2 if k >= 4 else 1))
+    rows, hold = c
+    f13 = pd.DataFrame(rows, columns=["cusip", "period", "price_13f", "n_price_filers", "n_filers"])
+    holders = pd.DataFrame(hold, columns=["cusip", "period", "filer_cik", "shares"])
+    bridge = pd.DataFrame({"cusip": ["XXX000031"], "cik": [31], "method": "isin"})
+    mains = sp.main_cusips(f13, bridge)
+    tab = sp.holder_table(mains, holders, as_of_period=PERIODS[-1])
+    assert list(tab.columns) == sp.HOLDER_COLS and len(tab) == 7
+    row = tab.set_index("period").loc[PERIODS[4]]
+    assert row["matched"] == 10 and row["ratio"] == 2.0 and row["agree"] == 1.0
+    a = sp.build_panel(mains, holders, None, bridge, as_of_period=PERIODS[-1])
+    b = sp.build_panel(mains, None, None, bridge, as_of_period=PERIODS[-1], holder_tab=tab)
+    pd.testing.assert_frame_equal(a[0], b[0])
+    assert a[1].equals(b[1]) and a[2]["splits_holders"] == b[2]["splits_holders"] == 1
 
 
 def test_validation_with_the_restated_history():
@@ -456,3 +506,41 @@ def test_a_restated_split_placed_in_a_fails_quarter_moves_to_the_holders_quarter
     assert len(s) == 1 and s.iloc[0]["evidence"] == "holders" and s.iloc[0]["period"] == PERIODS[5]
     assert info["restated_moved"] == 1 and info["restated_applied"] == 0 and info["fails_dropped_at_split"] == 1
     assert panel["price"].round(3).tolist() == [10.0, 9.5, 9.0, 8.5, 7.5, 7.0, 6.5]
+
+
+def test_validation_on_the_study_population_with_the_holders_as_arbiter():
+    q = pd.date_range("2015-03-31", "2016-06-30", freq="QE")
+    days = pd.bdate_range("2015-03-02", "2016-07-15")
+
+    def series(cik, adj, raw):
+        return pd.DataFrame({"ticker": f"CIK{cik}", "cik": cik, "period": q, "date": q + pd.Timedelta(days=1),
+                             "price": adj, "close_raw": raw, "cusip": "C%08d" % cik, "n_filers": 12,
+                             "price_source": "13F", "source": "sec"})
+
+    panel = pd.concat([
+        series(41, [5, 5.5, 6, 6.5, 7, 7.5], [10, 11, 12, 6.5, 7, 7.5]),           # 2:1, found
+        series(42, [9, 9, 9, 6, 6, 6], [9, 9, 9, 6, 6, 6]),                          # a spin-off, foreign issuer
+        series(43, [5, 5, 6, 6, 6, 6], [10, 10, 6, 6, 6, 6]),                       # 2:1, missed
+    ], ignore_index=True)
+    ev = pd.DataFrame({"cik": [41], "period": [q[3]], "kind": "split", "ratio": [2.0], "evidence": ["holders"]})
+    # the vendor adjusts company 42's history by 4:3 for the spin-off
+    vend = {41: [5, 5.5, 6, 6.5, 7, 7.5], 42: [6.75, 6.75, 6.75, 6, 6, 6], 43: [5, 5, 6, 6, 6, 6]}
+    vendor = pd.concat([pd.DataFrame({"ticker": f"V{c}", "date": days, "price": np.interp(days.asi8, q.asi8, p)})
+                        for c, p in vend.items()], ignore_index=True)
+    keys = pd.concat([pd.DataFrame({"ticker": f"V{c}", "start_date": q + pd.Timedelta(days=1), "cik": c})
+                      for c in vend], ignore_index=True)
+    # ten holders: company 42's kept their counts through the spin-off
+    hold = pd.DataFrame({"cik": [41, 42, 43], "period": [q[3], q[3], q[2]], "matched": [10, 10, 10],
+                         "median_ratio": [2.0, 1.0, 2.0], "ratio": [2.0, 1.0, 2.0], "agree": [1.0, 1.0, 1.0]})
+    pop = pd.DataFrame({"cik": [41, 43], "first": pd.to_datetime(["2015-04-01"] * 2),
+                        "last": pd.to_datetime(["2015-10-01"] * 2)})
+    plain = sp.validate(panel, ev, vendor, keys)
+    assert plain["vendor_splits"] == 3 and plain["split_recall"] == round(1 / 3, 4)
+    out, cases = sp.validate(panel, ev, vendor, keys, holders=hold, population=pop, return_cases=True)
+    assert out["vendor_splits"] == 2 and out["vendor_moves_holders_same"] == 1 and out["split_recall"] == 0.5
+    assert out["quarters_compared_universe"] == 10 and out["vendor_splits_universe"] == 2
+    assert out["split_recall_universe"] == 0.5 and out["split_precision_universe"] == 1.0
+    assert out["found_by_universe"] == "holders 1 (100%)" and out["missed_holders_known"] == 1.0
+    assert set(cases["cik"]) == {43} and set(cases["category"]) == {"split missed"}
+    line = sp.case_lines(cases)[0]
+    assert line.startswith("split missed · cik 43 · 2015-06 to 2015-09") and line.endswith("holders 10 at 2")

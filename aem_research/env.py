@@ -83,16 +83,36 @@ def notebook_build(path) -> str | None:
     return None
 
 
-def check_notebook_fresh(repo_dir, notebook_name: str, build: str, *, colab_url: str | None = None) -> str | None:
+def notebook_release(path) -> int | None:
+    """The release number a generated notebook carries in its setup cell (NOTEBOOK_RELEASE = 7)."""
+    try:
+        nb = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for cell in nb.get("cells", []):
+        for line in cell.get("source", []):
+            m = re.match(r"\s*NOTEBOOK_RELEASE = (\d+)", line)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def check_notebook_fresh(repo_dir, notebook_name: str, build: str, *, colab_url: str | None = None,
+                         release: int | None = None) -> str | None:
     """Stop when the notebook being run is not the repository's current one.
 
     Colab keeps an opened notebook as it was; the setup cell pulls the newest code, so an old
     copy would run new code with old steps – and finish without an error. The builders stamp
     every notebook with a hash of its cells; this compares the running copy's stamp with the
-    one in the freshly pulled repository. Returns the repository's stamp."""
-    repo_build = notebook_build(Path(repo_dir) / "notebooks" / notebook_name)
+    one in the freshly pulled repository, and names both release numbers. Returns the
+    repository's stamp."""
+    path = Path(repo_dir) / "notebooks" / notebook_name
+    repo_build = notebook_build(path)
     if repo_build and build and repo_build != build:
         where = f": {colab_url}" if colab_url else ""
-        raise StaleNotebook(f"This is an older copy of {notebook_name} (build {build}; the repository's is "
-                            f"{repo_build}). Open it again from the README link{where} – its steps changed.")
+        repo_release = notebook_release(path)
+        this = f"v{release} (build {build})" if release is not None else f"an older copy (build {build})"
+        newer = f"v{repo_release}" if repo_release is not None else "a newer version"
+        raise StaleNotebook(f"This is {this} of {notebook_name}; the repository has {newer} (build {repo_build}). "
+                            f"Open {newer} from the README link{where} – its steps changed.")
     return repo_build

@@ -14,7 +14,11 @@ read across a CUSIP change drift with the stock.
 The SEC Financial Statement Data Sets carry every comparative column, so the extract
 (aem_research.data.fsds) already holds both reports. From consecutive reports of the same
 fact (tag, period end, duration) by one company, amendments left out:
-  * a ratio within 1% of 1 says no split happened between the two filing dates;
+  * a ratio within 1% of 1 in the weighted-average shares says no split happened between
+    the two filing dates – only these must be restated (ASC 260); a balance-sheet or
+    equity-statement count may stay as first reported, with the split shown as a
+    movement (the Nov 9 run: such counts denied about 60 splits the holders and the
+    vendors both showed), so they never rule a split out;
   * a ratio within 1% of a standard split ratio of at least 1.2 either way, plus what the
     reported values' rounding allows, says one did, by that ratio;
   * anything else (a correction, the new history after a reverse merger) says nothing.
@@ -33,6 +37,7 @@ from .data.fsds import TAG_GROUPS
 
 # history, reported again as comparatives: not the cover page, a count at the filing date
 TAGS = TAG_GROUPS["shares_wad"] + TAG_GROUPS["shares_bs"]
+N_WAD = len(TAG_GROUPS["shares_wad"])     # TAGS[:N_WAD]: the weighted-average shares (tag code = key % 8)
 SAME_TOL = 0.01          # a ratio within 1% of 1: no split between the two filings
 RATIO_TOL = 0.01         # within 1% of a standard ratio (plus rounding): a split
 ROUND_CAP = 0.02         # the rounding allowance of one reported value, at most 2%
@@ -191,9 +196,9 @@ def _events(obs: pd.DataFrame) -> pd.DataFrame:
 
 
 def _spans(obs: pd.DataFrame) -> pd.DataFrame:
-    """The no-split observations of each company, inset by SAME_INSET and merged where they
-    overlap or touch: no split happened in (lo, hi]."""
-    s = obs[obs["kind"] == "same"]
+    """The no-split observations of each company's weighted-average shares, inset by
+    SAME_INSET and merged where they overlap or touch: no split happened in (lo, hi]."""
+    s = obs[(obs["kind"] == "same").to_numpy() & ((obs["key"].to_numpy(dtype="int64") % 8) < N_WAD)]
     if s.empty:
         return _empty(SPAN_COLS, ["int64", "datetime64[ns]", "datetime64[ns]"])
     a = s["lo"].to_numpy(dtype="datetime64[ns]") + np.timedelta64(SAME_INSET[0], "D")
@@ -218,7 +223,10 @@ def evidence(facts: pd.DataFrame | None, subs: pd.DataFrame | None = None, *,
     o = observations(facts, subs) if obs is None else obs
     ev, spans = _events(o), _spans(o)
     k = o["kind"].value_counts() if len(o) else pd.Series(dtype="int64")
-    info = {"observations": int(len(o)), "obs_same": int(k.get("same", 0)), "obs_split": int(k.get("split", 0)),
+    wad = (o["key"].to_numpy(dtype="int64") % 8) < N_WAD if len(o) else np.zeros(0, dtype=bool)
+    info = {"observations": int(len(o)), "obs_same": int(k.get("same", 0)),
+            "obs_same_wad": int(((o["kind"] == "same").to_numpy() & wad).sum()) if len(o) else 0,
+            "obs_split": int(k.get("split", 0)),
             "obs_other": int(k.get("other", 0)), "events": int(len(ev)),
             "events_two_periods": int((ev["n_periods"] >= 2).sum()) if len(ev) else 0,
             "companies_with_events": int(ev["cik"].nunique()) if len(ev) else 0,

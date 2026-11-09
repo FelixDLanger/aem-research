@@ -107,3 +107,29 @@ def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     assert env.check_notebook_fresh(tmp_path, NOTEBOOK.name, env.notebook_build(NOTEBOOK)) == env.notebook_build(NOTEBOOK)
     with pytest.raises(env.StaleNotebook, match="README link"):
         env.check_notebook_fresh(tmp_path, NOTEBOOK.name, "0" * 12)
+
+
+def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
+    import aem_research
+    from aem_research import env
+    rel = aem_research.RELEASE
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D)):
+        assert env.notebook_release(nb_path) == rel, nb_path.name
+        cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
+        title = "".join(cells[0]["source"]).splitlines()[0]
+        assert title.startswith("# ") and title.endswith(f"· v{rel}"), title
+        assert f"[Open notebook {num} · v{rel} in Colab]" in readme
+    # an older copy names its own version and the one to open
+    (tmp_path / "notebooks").mkdir()
+    (tmp_path / "notebooks" / NOTEBOOK.name).write_text(NOTEBOOK.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(env.StaleNotebook, match=rf"This is v{rel - 1} \(build 0+\).*Open v{rel} from the README link"):
+        env.check_notebook_fresh(tmp_path, NOTEBOOK.name, "0" * 12, release=rel - 1)
+
+
+def test_paste_blocks_lead_with_the_release():
+    from aem_research.report import paper_a_block, paste_block
+    assert paste_block({"release": 7}).splitlines()[0].startswith("AEM RUN SUMMARY v7 – ")
+    assert paste_block({"release": 7}).splitlines()[2].startswith("v7 · run ")
+    assert paper_a_block({"release": 7}).splitlines()[0].startswith("PAPER A RUN SUMMARY v7 – ")
+    assert paste_block({}).splitlines()[0].startswith("AEM RUN SUMMARY v? – ")

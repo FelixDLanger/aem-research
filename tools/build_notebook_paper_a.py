@@ -34,7 +34,9 @@ def phase(name, body, before="", after=""):
 
 
 md("""
-# Paper A – 02 take-private sample from SEC filings (counts only)
+# Paper A – 02 take-private sample from SEC filings (counts only) · v__RELEASE__
+
+**Version v__RELEASE__.** The paste block's first line repeats it; an older open copy stops at setup and names the current version.
 
 **What this does.** Builds the sample for Paper A – regime-conditional value creation in US take-private buyouts – from free, public SEC filings. It finds sponsor-backed take-privates through EDGAR full-text search, reads each deal's merger document for the offer price, the equity and debt commitments and the sponsor, attaches the target's last XBRL financials (EBITDA, net debt) and the public small-cap benchmark multiples, detects which exits became public again, and reads WSIB's quarterly private equity fund table. Everything is saved to Drive, with an Excel workbook.
 
@@ -108,10 +110,12 @@ COMMIT = _git("-C", REPO_DIR, "rev-parse", "--short", "HEAD").stdout.strip() or 
 # a hash of this notebook's cells, set by its builder: an older copy (Colab keeps an opened
 # notebook as it was) would run the newest code with old steps, so it stops here instead
 NOTEBOOK_BUILD = "__BUILD__"
+NOTEBOOK_RELEASE = __RELEASE__
 from aem_research.env import check_notebook_fresh
-check_notebook_fresh(REPO_DIR, "02_paper_a_take_private_sample.ipynb", NOTEBOOK_BUILD,
+check_notebook_fresh(REPO_DIR, "02_paper_a_take_private_sample.ipynb", NOTEBOOK_BUILD, release=NOTEBOOK_RELEASE,
                      colab_url="https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb")
-print(f"aem_research {aem_research.__version__} @ {COMMIT} · pandas {pd.__version__} · Colab: {IN_COLAB}")
+print(f"Notebook 02 · v{NOTEBOOK_RELEASE} · aem_research {aem_research.__version__} @ {COMMIT} · "
+      f"pandas {pd.__version__} · Colab: {IN_COLAB}")
 """)
 
 code("""
@@ -125,7 +129,7 @@ cfg_a = load_config(os.path.join(REPO_DIR, "config", "paper_a.yaml"),
 cfg_b = load_config(os.path.join(REPO_DIR, "config", "preregistration.yaml"))
 print(cfg_a.summary())
 REPORT = {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "repo_commit": COMMIT,
-          "notebook_build": NOTEBOOK_BUILD, "config_sha256": cfg_a.sha256, "lock_status": cfg_a.status,
+          "notebook_build": NOTEBOOK_BUILD, "release": NOTEBOOK_RELEASE, "config_sha256": cfg_a.sha256, "lock_status": cfg_a.status,
           "versions": versions()}
 """)
 
@@ -425,6 +429,11 @@ def to_source(text):
 
 # the build stamp: a hash of every cell with the placeholder in place, so it is reproducible
 import hashlib  # noqa: E402
+import re  # noqa: E402
+# the release number (aem_research.RELEASE) goes into the cells first, so the stamp changes with it
+_REL = re.search(r"^RELEASE = (\d+)", (Path(__file__).resolve().parents[1] / "aem_research" / "__init__.py")
+                 .read_text(encoding="utf-8"), re.M).group(1)
+CELLS = [(kind, text.replace("__RELEASE__", _REL)) for kind, text in CELLS]
 _BUILD = hashlib.sha256("\x1e".join(text for _, text in CELLS).encode("utf-8")).hexdigest()[:12]
 CELLS = [(kind, text.replace("__BUILD__", _BUILD)) for kind, text in CELLS]
 
