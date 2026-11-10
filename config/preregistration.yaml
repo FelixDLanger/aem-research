@@ -1,4 +1,4 @@
-# AEM base-rate study – pre-registration (DRAFT)
+# AEM base-rate study – pre-registration (final, locked Nov 10, 2026 – see config/LOCK.json)
 #
 # How the lock works
 #   * Everything below this comment block is hashed (SHA-256 of the parsed YAML,
@@ -14,8 +14,8 @@
 study:
   id: aem-basestudy
   title: "Base rates for extreme multiples in US small caps, and the information content of AEM screening signals"
-  version: "0.3"
-  status: draft
+  version: "1.0"
+  status: final
   author: "Felix D. Langer"
   framework: "AEM-2 v2.6 (the screening terminal's default since Oct 25, 2026)"
 
@@ -128,8 +128,22 @@ decisions:
       and fills only the companies the vendors never priced. Decided before any outcome
       was computed.
 
-review_before_lock:
-  - >-
+  - id: D11
+    topic: lock and data run
+    status: decided by Felix on Nov 9, 2026 (lock in the run whose gates pass, then print the results from it)
+    decision: >-
+      The pre-registration is locked once a notebook-01 run passes every pre-lock gate
+      (lock_gates), and the lock names that run as its data run – its commit, version,
+      notebook build and start time (config/LOCK.json). The results come from that run's
+      saved tables (notebook 04), which refuses to compute any outcome unless the lock names
+      exactly the run on Drive and every gate passed in it; a later notebook-01 run computes
+      outcomes only when its own gates pass. H1 is reported first. The estimators for H2 to
+      H4 and the H3 test are coded after the lock, strictly as the estimation section
+      specifies, and run on synthetic data before they touch real outcomes.
+
+review_before_lock: []
+
+lock_gates: >-
     Run Phase F of the notebook once (counts only, no returns) and check that each
     feature is known for at least 80% of universe windows from its first formation
     date, and that fewer than 25% of ended series fall into the "unknown" delisting
@@ -140,7 +154,7 @@ review_before_lock:
     in price_basis.validation; both on the study's population, as defined there), and the panel prices at least 80% of the vendor panel's
     holes that are exchange-listed. Universe A must be of the same order as the vendor
     universe on the same dates (the FUNNEL A and A VS V lines show each filter's share).
-    If a check fails, fix the definition here before locking.
+    A run that fails one computes no outcomes (D11).
 
 hypotheses:
   - id: H1
