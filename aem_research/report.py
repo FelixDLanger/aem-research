@@ -189,11 +189,14 @@ def paper_a_block(report: dict) -> str:
     for key, label in (("inputs", "INPUTS    "), ("index", "INDEX     "), ("search", "SEARCH    "),
                        ("deals", "DEALS     "), ("entry", "ENTRY     "), ("exits", "EXITS     "),
                        ("by_year", "BY YEAR   "), ("bench", "BENCH     "), ("regime", "REGIME    "),
-                       ("wsib", "WSIB      ")):
+                       ("wsib", "WSIB      "), ("check", "CHECK     ")):
         if r.get(key):
             lines.append(label + (_items(r[key]) if isinstance(r[key], dict) else str(r[key])))
         elif key in ("inputs", "search", "deals"):
             lines.append(label + "not reached")
+    if r.get("sec_user_agent"):                    # a refused request is usually a secret the notebook cannot read
+        lines.insert(3, f"SEC ID    {r['sec_user_agent']}")
+    lines += list(r.get("check_lines") or [])      # the seeded reading sample: values with their passages
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)

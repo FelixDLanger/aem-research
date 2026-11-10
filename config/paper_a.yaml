@@ -45,9 +45,10 @@ review_before_lock:
     have entry financials, an offer price and a visible exit; then fix the sample rules
     below.
   - >-
-    Hand-check 30 randomly drawn deals' extracted terms (offer price, equity and debt
-    commitments, sponsor) against the filings; target 90% correct before the terms are
-    used.
+    Check the extracted terms (offer price, equity and debt commitments, sponsor) as
+    the validation section says: 30 deals drawn by a fixed seed, read against the
+    passages they came from, and a second filing for every deal; target 90% correct
+    before the terms are used.
   - >-
     Agree the hypotheses below with Felix (drafted by Claude on Nov 6, 2026), then set
     study.status to final.
@@ -78,6 +79,27 @@ sample:
   completion_window_months: 18
   current_filer_months: 15
   value_bridge_excludes_sic: [6000, 6799]     # banks, insurers, REITs: EBITDA is not meaningful
+
+validation:
+  decided: by Felix on Nov 10, 2026 (the check runs in the notebook; Claude reads the 30, Felix the disagreements)
+  reading_sample:
+    n: 30
+    seed: 20261110
+    draw: >-
+      completed deals whose document was read, ordered by SHA-256 of "seed:deal_id";
+      the first 30. Each is shown with every extracted value and the passage it came from.
+    target: 90% of the read values correct
+  second_source:
+    what: >-
+      the target's own 8-K within the window around the first merger filing that names
+      the merger agreement and a per-share price (press release before the 8-K before
+      the agreement exhibit; the earliest such filing), else another target-side merger
+      filing of the deal; never the filing the terms were read from
+    days_before: 150
+    days_after: 30
+  price_tolerance: 0.005        # offer prices agree within 0.5%
+  value_tolerance: 0.15         # stated deal value within 15% of the computed equity or enterprise value
+  commitment_tolerance: 0.01    # commitments, compared only against another merger filing
 
 entry:
   date: the first target-side merger filing (proxy, information statement, 14D-9 or 13E-3)

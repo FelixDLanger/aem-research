@@ -217,3 +217,128 @@ def test_documents_are_read_once_kept_on_drive_and_re_read_after_an_extractor_ch
     t3, st3 = tp.read_documents(deals, client=none, cache_dir=tmp_path, log=None)
     assert st3["read"] == 2 and not any("d1defm14a" in u for u in none.requests)   # re-read from Drive
     assert t3.set_index("deal_id").loc["1001-20150501", "sponsor"] == "Thoma Bravo"
+
+
+# ---- the check of the terms: a second filing for every deal, a seeded sample to read
+
+PRESS = ("<p>Acme Widgets today announced that it has entered into a definitive merger agreement to be acquired by "
+         "Thoma Bravo in an all-cash transaction valued at approximately $2.1 billion. Under the terms of the "
+         "agreement, stockholders will receive $27.50 per share in cash.</p>")
+
+
+def _check_deals():
+    return pd.DataFrame({
+        "deal_id": ["100-20200301", "200-20210601", "300-20220115"], "target_cik": [100, 200, 300],
+        "target_name": ["ACME WIDGETS INC", "BRIGHTLINE INC", "COBALT INC"],
+        "doc_adsh": ["A-1", "B-1", "C-1"], "doc_form": ["DEFM14A", "DEFM14A", "SC 14D9"],
+        "doc_url": ["u1", "u2", "u3"], "first_filed": pd.to_datetime(["2020-03-01", "2021-06-01", "2022-01-15"]),
+        "last_filed": pd.to_datetime(["2020-04-01", "2021-06-20", "2022-01-15"]), "completed": [True, True, False],
+        "offer_price": [27.5, 12.0, 8.0], "price_snippet": ["right to receive $27.50 in cash", "$12.00 per share", "x"],
+        "equity_commitment_usd": [1.25e9, 3e8, np.nan], "equity_snippet": ["e1", "e2", ""],
+        "debt_commitment_usd": [9e8, 2e8, np.nan], "debt_snippet": ["d1", "d2", ""],
+        "sponsor": ["Thoma Bravo", "KKR", ""], "sponsor_snippet": ["an affiliate of Thoma Bravo", "KKR", ""],
+        "text_chars": [5000, 4000, 0], "equity_value": [2.0e9, 5e8, np.nan], "enterprise_value": [2.6e9, 6e8, np.nan]})
+
+
+def test_deal_value_and_every_sponsor_are_read_from_an_announcement():
+    text = tp.html_to_text(PRESS)
+    v = tp.extract_deal_value(text)
+    assert v["deal_value_usd"] == 2.1e9 and v["deal_value_kind"] == "transaction" and "valued at" in v["value_snippet"]
+    assert tp.extract_deal_value("an enterprise value of approximately $850 million")["deal_value_kind"] == "enterprise"
+    assert np.isnan(tp.extract_deal_value("a termination fee of $20 million")["deal_value_usd"])
+    assert tp.sponsors_named("KKR and Thoma Bravo; Thoma Bravo leads") == ["Thoma Bravo", "KKR"]
+    t = tp.extract_terms(text)
+    assert t["offer_price"] == 27.5 and t["sponsor"] == "Thoma Bravo" and "Thoma Bravo" in t["sponsor_snippet"]
+    assert tp.extract_terms("holders receive $31.25 in cash, without interest, per share")["offer_price"] == 31.25
+    # a larger debt amount right after the equity sentence stays the debt's
+    both = tp.extract_terms("Sponsor delivered an equity commitment letter for equity financing of up to $170.0 million. "
+                            "The debt commitment letter provides debt financing of $270 million.")
+    assert both["equity_commitment_usd"] == 170e6 and both["debt_commitment_usd"] == 270e6
+
+
+def test_second_queries_ask_for_the_targets_own_8k_around_the_announcement():
+    q = tp.second_queries(_check_deals())
+    assert len(q) == 3 and q[0] == {"key": "100-20200301", "q": tp.SECOND_QUERY, "forms": ["8-K"], "ciks": 100,
+                                    "start": "2019-10-03", "end": "2020-03-31"}
+
+
+def test_the_second_document_is_an_8k_first_then_another_merger_filing_never_the_same_filing():
+    deals = _check_deals()
+    h8 = pd.DataFrame({"key": ["100-20200301"] * 3 + ["200-20210601"], "adsh": ["K-2", "K-1", "K-1", "B-1"],
+                       "file_name": ["late.htm", "d8k.htm", "ex991.htm", "same.htm"],
+                       "form": ["8-K"] * 4, "root_form": ["8-K"] * 4, "file_type": ["8-K", "8-K", "EX-99.1", "8-K"],
+                       "file_date": pd.to_datetime(["2020-02-20", "2020-01-10", "2020-01-10", "2021-05-01"])})
+    hits = pd.DataFrame({"adsh": ["A-1", "A-2", "B-2", "B-3", "B-4"], "ciks": ["100", "100", "200;999", "200", "200"],
+                         "file_name": ["defm.htm", "prem.htm", "ex_d1.htm", "defm_a.htm", "sc13e3.htm"],
+                         "form": ["DEFM14A", "PREM14A", "SC 13E3", "DEFM14A/A", "SC 13E3"],
+                         "root_form": ["DEFM14A", "PREM14A", "SC 13E3", "DEFM14A", "SC 13E3"],
+                         "file_type": ["DEFM14A", "PREM14A", "EX-99.(D)(1)", "DEFM14A/A", "SC 13E3"],
+                         "file_date": pd.to_datetime(["2020-03-01", "2020-03-01", "2021-06-01", "2021-06-10", "2021-06-12"])})
+    p = tp.pick_second(deals, h8, hits).set_index("deal_id")
+    assert p.loc["100-20200301", ["second_adsh", "second_file", "second_kind"]].tolist() == \
+        ["K-1", "ex991.htm", "8-K announcement"]                       # earliest 8-K, its press release first
+    # deal B: its only 8-K hit is the filing the terms came from, so another form's main document is taken
+    assert p.loc["200-20210601", ["second_adsh", "second_form", "second_kind"]].tolist() == \
+        ["B-4", "SC 13E3", "other merger filing"]
+    assert "300-20220115" not in p.index and len(tp.pick_second(deals, None, None)) == 0
+
+
+def test_second_documents_are_read_cached_and_compared_term_by_term(tmp_path):
+    deals = _check_deals()
+    picks = pd.DataFrame({"deal_id": ["100-20200301", "200-20210601"], "second_adsh": ["K-1", "B-4"],
+                          "second_file": ["ex991.htm", "sc13e3.htm"], "second_form": ["8-K", "SC 13E3"],
+                          "second_kind": ["8-K announcement", "other merger filing"],
+                          "second_filed": pd.to_datetime(["2020-01-10", "2021-06-12"])})
+    other = ("<p>Holders receive $12.60 per share in cash. Apollo delivered an equity commitment letter for equity "
+             "financing of $300 million. The debt commitment letter provides debt financing of $250 million.</p>")
+
+    class Client:
+        calls = 0
+
+        def get(self, url):
+            Client.calls += 1
+            return (PRESS if "ex991" in url else other).encode()
+
+    second, st = tp.read_second(deals, picks, client=Client(), cache_dir=tmp_path)
+    assert st["read"] == 2 and Client.calls == 2 and second["second_url"].str.contains("/Archives/edgar/data/").all()
+    again, st2 = tp.read_second(deals, picks, client=None, cache_dir=tmp_path, offline=True)
+    assert st2["cached"] == 2 and again["second_offer_price"].tolist() == [27.5, 12.6]
+    d = tp.cross_check(deals.merge(second, on="deal_id", how="left")).set_index("deal_id")
+    a, b, c = d.loc["100-20200301"], d.loc["200-20210601"], d.loc["300-20220115"]
+    # the press release: price and sponsor agree, $2.1bn is within 15% of the $2.0bn equity value
+    assert (a["check_price"], a["check_sponsor"], a["check_value"], a["check_flag"]) == ("agree",) * 4
+    assert a["check_equity"] == "one source"                 # an announcement is not asked for commitments
+    # the other filing: 12.60 against 12.00 is outside 0.5%, another sponsor, equity agrees, debt does not
+    assert (b["check_price"], b["check_sponsor"], b["check_equity"], b["check_debt"]) == \
+        ("disagree", "disagree", "agree", "disagree") and b["check_flag"] == "disagree"
+    assert c["check_flag"] == "unchecked" and c["check_price"] == "one source" and c["check_sponsor"] == "none"
+    s = tp.check_summary(d.reset_index(), ["100-20200301"], 7)
+    assert s["second_8k"] == 1 and s["second_other_filing"] == 1 and s["second_none"] == 1
+    assert s["price"] == "1 of 2 agree" and s["deals_flagged"] == 1 and s["reading_sample"] == "1 deals, seed 7"
+    # without a second document nothing breaks and nothing is confirmed
+    empty = tp.cross_check(deals.iloc[0:0])                  # no deals at all (notebook 01 never ran)
+    assert len(empty) == 0 and set(tp.CHECK_COLUMNS) <= set(empty.columns) and tp.check_summary(empty, [], 1) == {}
+    assert len(tp.read_second(deals.iloc[0:0], tp.pick_second(deals.iloc[0:0], None, None), cache_dir=tmp_path / "e")[0]) == 0
+    bare = tp.cross_check(deals)
+    assert bare["check_flag"].eq("unchecked").all() and tp.check_summary(bare, [], 1)["second_none"] == 3
+
+
+def test_the_reading_sample_is_seeded_stable_and_shown_with_its_passages(tmp_path):
+    deals = tp.cross_check(_check_deals())
+    ids = tp.check_sample(deals, n=30, seed=20261110)
+    assert sorted(ids) == ["100-20200301", "200-20210601"]           # completed deals with a read document
+    assert ids == tp.check_sample(deals.iloc[::-1], n=30, seed=20261110)      # the order of the table does not matter
+    assert tp.check_sample(deals, n=1, seed=20261110) == ids[:1]     # a larger sample keeps the smaller one
+    many = pd.concat([deals.assign(deal_id=[f"{k}-{i}" for i in range(3)]) for k in range(40)], ignore_index=True)
+    assert tp.check_sample(many, 30, 1) != tp.check_sample(many, 30, 2) and len(tp.check_sample(many, 30, 1)) == 30
+    assert tp.check_sample(deals.drop(columns="text_chars"), 30, 1) == [] and tp.check_sample(None, 30, 1) == []
+    sheet = tp.check_sheet(deals, ids)
+    assert len(sheet) == 10 and set(sheet["term"]) == {"offer price", "equity commitment", "debt commitment",
+                                                       "sponsor", "deal value"}
+    row = sheet[(sheet["deal_id"] == "100-20200301") & (sheet["term"] == "offer price")].iloc[0]
+    assert row["extracted"] == "27.5" and row["passage"] == "right to receive $27.50 in cash" and row["source_url"] == "u1"
+    lines = tp.check_lines(deals, ids)
+    assert sum(x.startswith("CHECK 0") for x in lines) == 2 and any("second source: none found" in x for x in lines)
+    assert any(x.startswith("  equity commitment: $1.25bn | «e1» [one source]") for x in lines)
+    assert any("deal value: equity $2.00bn, enterprise $2.60bn" in x for x in lines)
+    assert tp.check_lines(deals, []) == [] and len(tp.check_sheet(deals, [])) == 0

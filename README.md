@@ -2,12 +2,12 @@
 
 Base rates for extreme multiples in US small caps, and whether the AEM screening signals carry information. Empirical code for the AEM paper (Paper B) and, from the same data layer, the take-private sample for Paper A on regime-conditional value creation in buyouts.
 
-[Open notebook 01 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
-[Open notebook 02 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
-[Open notebook 03 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
-[Open notebook 04 · v8 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/04_results.ipynb) – the results, after the lock: outcomes and H1 from the notebook-01 run the lock names (a few minutes)
+[Open notebook 01 · v9 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
+[Open notebook 02 · v9 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
+[Open notebook 03 · v9 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
+[Open notebook 04 · v9 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/04_results.ipynb) – the results, after the lock: outcomes and H1 from the notebook-01 run the lock names (a few minutes)
 
-The version (v8) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
+The version (v9) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
 
 ## Design at a glance (pre-registration v0.3, draft)
 
@@ -76,7 +76,7 @@ Features, delisting classes and the regime table are also cached as parquet in `
 
 ## Paper A – take-private sample (notebook 02)
 
-Run it after notebook 01: it reuses that run's Drive caches and downloads only what is new. Sponsor-backed take-privates are found with EDGAR full-text search ("equity commitment letter" in target-side merger filings, 2012 on); each deal's definitive document gives the offer price, the equity and debt commitments and the sponsor, each with the sentence it came from for hand-checking; the target's last XBRL financials give entry EBITDA, net debt and enterprise value; the exit routes that leave a public trace (still files with the SEC, re-IPO, sale to a listed buyer) are detected; the public small-cap benchmark multiples and WSIB's quarterly fund table complete the inputs. The method follows Guo, Hotchkiss and Song (2011, Journal of Finance 66(2), 479–517).
+Run it after notebook 01: it reuses that run's Drive caches and downloads only what is new. Sponsor-backed take-privates are found with EDGAR full-text search ("equity commitment letter" in target-side merger filings, 2012 on); each deal's definitive document gives the offer price, the equity and debt commitments and the sponsor, each with the sentence it came from; the terms are checked against a second filing for every deal (the target's 8-K around the announcement, else another merger filing) and on 30 deals drawn by a fixed seed, shown with their passages; the target's last XBRL financials give entry EBITDA, net debt and enterprise value; the exit routes that leave a public trace (still files with the SEC, re-IPO, sale to a listed buyer) are detected; the public small-cap benchmark multiples and WSIB's quarterly fund table complete the inputs. The method follows Guo, Hotchkiss and Song (2011, Journal of Finance 66(2), 479–517).
 
 Until `config/paper_a.yaml` is locked (decision A2), notebook 02 shows counts and entry-side data only – no exit values, exit dates, value-creation components or fund returns; those are cached for after the lock. Outputs: `paper_a_sample.xlsx` (deals, review snippets, exit routes, benchmark, WSIB counts), `paper_a_summary.txt` (the paste block) and `paper_a_progress.txt` in `My Drive/aem-research/output/`.
 
@@ -104,4 +104,4 @@ The code is licensed under the GNU Affero General Public License v3.0 (`LICENSE`
 
 Built and tested: config lock with review gate; the SEC price panel with split detection and its validation (D10); SimFin and Stooq readers; SEC index (Form 25, merger filings); the three SEC data sets and the fails-to-deliver files; point-in-time fundamentals, insider signals and attention; universe, cohort, placebo and signal flags; delisting classification; FRED regime moderators; power table; coverage audit with the EODHD verdict; outcome engine; guards; Excel export; run log with a paste-ready summary.
 Paper A (notebook 02): take-private sample, terms, entry EBITDA and enterprise value, exit-route detection, public benchmark, WSIB fund table – counts only until Paper A's lock.
-Next: the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark; for Paper A, the hand-check of 30 deals, its hypotheses and lock, then exit values and the value bridge.
+Next: the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark; for Paper A, reading the 30 seeded deals and the cross-check's disagreements, its hypotheses and lock, then exit values and the value bridge.

@@ -5,7 +5,9 @@
   full   runs tools/e2e_synthetic.py (full) first, then adds Paper A's inputs the way the SEC
          and WSIB would serve them – full-text search results, deal documents (one reachable
          only through its filing index, one missing), Form 15 and IPO index subsets, an 8-K
-         exit, a post-buyout 10-K, two WSIB reports (one corrupt) – and executes every code
+         exit, a post-buyout 10-K, two WSIB reports (one corrupt), second documents for the
+         check of the terms (an agreeing press release, a disagreeing 8-K, a second proxy) –
+         and executes every code
          cell of notebook 02 offline. Checks counts, the blinding, the workbook and the block.
   fresh  notebook 02 on an empty Drive (notebook 01 never ran): it must finish and say so.
 Every scenario must finish with exit code 0.
@@ -107,7 +109,7 @@ else:
                     pd.DataFrame(columns=COLS).astype({"date_filed": "datetime64[ns]"}).to_pickle(p)
 
     # ---- full-text search results, cached exactly as the notebook's search would cache them
-    hits, docs = [], {}
+    hits, docs, info = [], {}, {}
     for i, r_ in m.iterrows():
         cik, when = int(r_["cik"]), r_["date_filed"].strftime("%Y-%m-%d")
         adsh = f"0001193125-{r_['date_filed']:%y}-{900000 + i:06d}"
@@ -129,6 +131,25 @@ else:
                     f"<p>The debt commitment letter provides debt financing of ${debt} million. {sp} will own the company. "
                     f"Stockholders receive ${price}.50 per share in cash. {sp} {sp}</p>")
             docs[A_DIR / "docs" / f"{adsh}_{tp._safe(main)}.txt.gz"] = tp.html_to_text(html)
+            info[i] = {"cik": cik, "date": r_["date_filed"], "price": price, "sponsor": sp, "html": html, "name": r_["name"]}
+    # the check's second documents: deal 4 has a second proxy (filed five days later, same terms) …
+    x = info[4]
+    adsh_p = "0001193125-99-444444"
+    hits.append(_hit(adsh_p, "dprem14a.htm", [x["cik"]], "PREM14A", (x["date"] + pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+                     names=[f"{x['name']}  (CIK {x['cik']:010d})"]))
+    docs[A_DIR / "docs" / f"{adsh_p}_dprem14a.htm.txt.gz"] = tp.html_to_text(x["html"])
+    # … deal 0 an agreeing press release, deal 1 an 8-K that states another price
+    second_8k = {}
+    for i, (price, fname, ftype) in {0: (f"{info[0]['price']}.50", "dex991.htm", "EX-99.1"),
+                                     1: ("99.00", "d8k.htm", "8-K")}.items():
+        x = info[i]
+        adsh8 = f"0001193125-99-55555{i}"
+        second_8k[x["cik"]] = _hit(adsh8, fname, [x["cik"]], "8-K", (x["date"] - pd.Timedelta(days=40)).strftime("%Y-%m-%d"),
+                                   file_type=ftype)
+        docs[A_DIR / "docs" / f"{adsh8}_{fname}.txt.gz"] = tp.html_to_text(
+            f"<p>{x['name']} today announced that it has entered into a definitive merger agreement to be acquired by "
+            f"{x['sponsor']} in an all-cash transaction valued at approximately $1.2 billion. Stockholders will "
+            f"receive ${price} per share in cash.</p>")
     hits.append(_hit("0001193125-16-999999", "x8k.htm", [int(m.loc[0, "cik"])], "8-K", "2016-05-01"))   # not merger-side
     fts.search(tp.QUERY, tp.TARGET_FORMS, "2012-01-01", TODAY, client=FakeFTS(hits), cache_dir=A_DIR / "fts",
                today=TODAY.date(), log=None)
@@ -154,6 +175,15 @@ else:
             return json.dumps({"hits": {"total": {"value": len(hit), "relation": "eq"}, "hits": hit}}).encode()
 
     fts.search_many(queries, client=Exits(), cache_path=A_DIR / "fts_exits", log=None)
+
+    class Second:                                           # the target's own 8-Ks, asked for by CIK
+        def get(self, url):
+            hit = [h for c, h in second_8k.items() if f"ciks={c:010d}" in url]
+            return json.dumps({"hits": {"total": {"value": len(hit), "relation": "eq"}, "hits": hit}}).encode()
+
+    second_q = tp.second_queries(deals)
+    assert all("ciks" in q for q in second_q) and len(second_q) == len(deals)
+    fts.search_many(second_q, client=Second(), cache_path=A_DIR / "fts_second", log=None)
     print(f"Paper A inputs: {len(m)} targets, {len(queries)} exit searches, {len(docs)} cached documents")
 
     # ---- WSIB: one real-layout report and one corrupt download, saved by hand
@@ -211,7 +241,29 @@ assert "WARNING   [A8 WSIB] reports not read: 20250630" in block
 assert "1 of 1 match" in block or "subtotal checks 2 of 2 match" in block
 
 wb = pd.read_excel(out / "paper_a_sample.xlsx", sheet_name=None, engine="openpyxl")
-assert {"Summary", "Deals", "Review", "Exit routes", "Benchmark", "Search hits", "WSIB funds", "WSIB counts"} <= set(wb)
+assert {"Summary", "Deals", "Review", "Exit routes", "Benchmark", "Search hits", "WSIB funds", "WSIB counts",
+        "Cross-check", "Check 30"} <= set(wb)
+
+# ---- the check of the terms: second documents for every deal, the seeded reading sample
+kinds = D["second_kind"].fillna("").value_counts().to_dict()
+assert kinds.get("8-K announcement") == 2 and kinds.get("other merger filing") == 1, kinds
+by_cik = D.reset_index().set_index("target_cik")
+d0, d1, d4 = (by_cik.loc[info[i]["cik"]] for i in (0, 1, 4))
+assert d0["check_price"] == "agree" and d0["check_sponsor"] == "agree" and d0["second_deal_value_usd"] == 1.2e9
+assert d0["equity_commitment_usd"] == 100e6 and d0["debt_commitment_usd"] == 200e6    # each its own amount
+assert d0["second_file"] == "dex991.htm" and d0["check_value"] in ("agree", "disagree")
+assert d1["check_price"] == "disagree" and d1["check_flag"] == "disagree" and d1["second_offer_price"] == 99.0
+assert d4["check_price"] == "agree" and d4["check_equity"] == "agree" and d4["check_debt"] == "agree"
+assert d4["second_form"] == "PREM14A" and d4["doc_form"] == "DEFM14A"
+assert (D["check_flag"] == "unchecked").sum() == EXPECT["deals"] - 3
+assert "CHECK     deals 8" in block and "second 8k 2 · second other filing 1" in block and "price 2 of 3 agree" in block
+ids = ns["CHECK_IDS"]
+assert ids == tp.check_sample(ns["DEALS"], 30, 20261110) and 1 <= len(ids) <= 30
+assert set(ids) <= set(D.index[D["completed"] & (D["text_chars"].fillna(0) > 0)])
+assert sum(line.startswith("CHECK 0") for line in block.splitlines()) == len(ids)
+assert "offer price: 10.5 | «" in block and "|| second: 10.5 | «" in block and "[agree]" in block and "[disagree]" in block
+assert len(wb["Check 30"]) == 5 * len(ids) and wb["Cross-check"]["check_flag"].iloc[0] == "disagree"
+assert "SEC ID    offline" in block
 hidden = set(tp.HIDDEN_UNTIL_LOCK)
 assert not hidden & set(wb["Deals"].columns) and not hidden & set(wb["Exit routes"].columns)
 assert "net_irr" not in wb["WSIB funds"].columns and "tvpi" not in wb["WSIB funds"].columns

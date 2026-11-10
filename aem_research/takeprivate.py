@@ -45,10 +45,10 @@ INDEX_SUBSETS = {"dereg": ("15-12B", "15-12G", "15-15D", "15-12B/A", "15-12G/A",
                  "ipo": ("S-1", "424B4", "424B1")}
 EXTRA_FLOWS = ("operating_income", "dna", "amortization", "pretax_income", "interest_expense")
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{name}"
-TERMS_VERSION = 1          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
+TERMS_VERSION = 2          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
 TERM_COLUMNS = ["deal_id", "doc_adsh", "main_file", "doc_url", "offer_price", "price_snippet", "price_mentions",
                 "equity_commitment_usd", "equity_snippet", "debt_commitment_usd", "debt_snippet", "sponsor",
-                "sponsor_mentions", "text_chars", "terms_version", "doc_error"]
+                "sponsor_mentions", "sponsor_snippet", "text_chars", "terms_version", "doc_error"]
 # Exit dates would give holding periods (an A-H3 outcome): cached, not shown before Paper A's lock.
 HIDDEN_UNTIL_LOCK = ["still_files_from", "reipo_date", "sale_date"]
 
@@ -78,7 +78,22 @@ _PRICE_PATTERNS = [
     re.compile(r"(?:offer price|merger consideration|per share merger consideration|per share price)"
                r",? (?:of|equal to|is|which is) \$\s?(\d{1,4}(?:\.\d{1,4})?)", re.I),
     re.compile(r"at a (?:purchase )?price of \$\s?(\d{1,4}(?:\.\d{1,4})?) per share", re.I),
+    re.compile(r"\$\s?(\d{1,4}(?:\.\d{1,4})?) in cash,? (?:without interest,? )?(?:per|for each) share", re.I),
 ]
+# The stated size of the deal, as announcements put it ("valued at approximately $2.1 billion").
+_VALUE_RE = re.compile(
+    r"(?:valued at|(?:enterprise|equity|transaction|aggregate) value of|"
+    r"total (?:transaction |equity |enterprise )?(?:value|consideration) of)\s+(?:approximately |about |roughly )?"
+    r"(?:US)?\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(million|billion)", re.I)
+# The check of the extracted terms: a second filing per deal and a seeded sample for reading.
+SECOND_VERSION = 1
+SECOND_QUERY = '"merger agreement" "per share"'
+SECOND_COLUMNS = ["deal_id", "second_adsh", "second_file", "second_form", "second_kind", "second_filed", "second_url",
+                  "second_offer_price", "second_price_snippet", "second_equity_commitment_usd",
+                  "second_debt_commitment_usd", "second_sponsors", "second_deal_value_usd", "second_deal_value_kind",
+                  "second_value_snippet", "second_text_chars", "second_version", "second_error"]
+CHECK_COLUMNS = ["check_price", "check_sponsor", "check_value", "check_equity", "check_debt", "check_flag"]
+_DEBT_ANCHOR = re.compile(r"debt commitment|debt financing|committed (?:debt|financing)|(?:term loan|credit) facilit", re.I)
 _FEE_CONTEXT = re.compile(r"termination fee|fee of|fees|guarantee|expense|reimburse|cap of|escrow|deposit", re.I)
 
 
@@ -106,11 +121,16 @@ def _snippet(text: str, start: int, end: int, pad: int = 160) -> str:
     return " ".join(text[max(0, start - pad):min(len(text), end + pad)].split())
 
 
-def _amounts_near(text: str, anchor: re.Pattern, *, before: int = 100, after: int = 500, minimum: float = 1e6):
-    """Largest dollar amount near each anchor, skipping fees, guarantees and expense caps."""
+def _amounts_near(text: str, anchor: re.Pattern, *, before: int = 100, after: int = 500, minimum: float = 1e6,
+                  stop: re.Pattern | None = None):
+    """Largest dollar amount near each anchor, skipping fees, guarantees and expense caps.
+    The window ends where `stop` begins (the debt paragraph must not lend the equity its amount)."""
     out = []
     for m in anchor.finditer(text):
         lo, hi = max(0, m.start() - before), min(len(text), m.end() + after)
+        nxt = stop.search(text, m.end(), hi) if stop is not None else None
+        if nxt is not None:
+            hi = nxt.start()
         best = None
         for a in _MONEY.finditer(text, lo, hi):
             if _FEE_CONTEXT.search(text[max(lo, a.start() - 60):a.start()]):
@@ -137,7 +157,7 @@ def extract_terms(text: str) -> dict:
     t = " ".join(text.split())
     out = {"offer_price": np.nan, "price_snippet": "", "price_mentions": 0, "equity_commitment_usd": np.nan,
            "equity_snippet": "", "debt_commitment_usd": np.nan, "debt_snippet": "", "sponsor": "",
-           "sponsor_mentions": 0, "text_chars": len(t)}
+           "sponsor_mentions": 0, "sponsor_snippet": "", "text_chars": len(t)}
     prices = []
     for pat in _PRICE_PATTERNS:
         for m in pat.finditer(t):
@@ -148,11 +168,11 @@ def extract_terms(text: str) -> dict:
     if best is not None:
         out["offer_price"], out["price_mentions"] = best[0], len(prices)
         out["price_snippet"] = _snippet(t, best[1], best[2])
-    eq = _mode(_amounts_near(t, re.compile(r"equity commitment|equity financing|equity contribution", re.I)))
+    eq = _mode(_amounts_near(t, re.compile(r"equity commitment|equity financing|equity contribution", re.I),
+                             stop=_DEBT_ANCHOR))
     if eq is not None:
         out["equity_commitment_usd"], out["equity_snippet"] = eq[0], _snippet(t, eq[1], eq[2])
-    debt = _amounts_near(t, re.compile(r"debt commitment|debt financing|committed (?:debt|financing)|"
-                                       r"(?:term loan|credit) facilit", re.I))
+    debt = _amounts_near(t, _DEBT_ANCHOR)
     if debt:
         top = max(debt, key=lambda v: v[0])
         out["debt_commitment_usd"], out["debt_snippet"] = top[0], _snippet(t, top[1], top[2])
@@ -161,7 +181,28 @@ def extract_terms(text: str) -> dict:
     if found:
         s, n = max(found, key=lambda f: (f[1], len(f[0])))
         out["sponsor"], out["sponsor_mentions"] = s, n
+        first = dict(_SPONSOR_RE)[s].search(t)
+        out["sponsor_snippet"] = _snippet(t, first.start(), first.end(), pad=120)
     return out
+
+
+def sponsors_named(text: str) -> list[str]:
+    """Every known sponsor the text names, most mentioned first."""
+    t = " ".join(str(text).split())
+    found = [(s, len(rx.findall(t))) for s, rx in _SPONSOR_RE]
+    return [s for s, n in sorted(found, key=lambda f: (-f[1], -len(f[0]))) if n > 0]
+
+
+def extract_deal_value(text: str) -> dict:
+    """The deal's stated size (the first statement in the text), its kind and its sentence."""
+    t = " ".join(str(text).split())
+    m = _VALUE_RE.search(t)
+    if m is None:
+        return {"deal_value_usd": np.nan, "deal_value_kind": "", "value_snippet": ""}
+    near = t[max(0, m.start() - 80):m.end()].lower()
+    kind = "enterprise" if "enterprise" in near else "equity" if "equity" in near else "transaction"
+    return {"deal_value_usd": _usd(m.group(1), m.group(2), m.group(3)), "deal_value_kind": kind,
+            "value_snippet": _snippet(t, m.start(), m.end())}
 
 
 def filing_documents(index_html) -> pd.DataFrame:
@@ -526,6 +567,272 @@ def exit_routes(deals: pd.DataFrame, subs: pd.DataFrame, ipo: pd.DataFrame | Non
                                 default="not visible")
     d["post_buyout_financials"] = d["still_files_from"].notna()
     return d
+
+
+# ---------------------------------------------------------------------------
+# Check of the extracted terms: a second filing for every deal, a seeded sample to read
+# ---------------------------------------------------------------------------
+
+def second_queries(deals: pd.DataFrame, *, days_before: int = 150, days_after: int = 30) -> list[dict]:
+    """One full-text search per deal: the target's own 8-K around the announcement that
+    speaks of the merger agreement and a per-share price (the press release or the agreement)."""
+    out = []
+    for d in deals.itertuples():
+        if pd.isna(d.target_cik) or pd.isna(d.first_filed):
+            continue
+        out.append({"key": d.deal_id, "q": SECOND_QUERY, "forms": ["8-K"], "ciks": int(d.target_cik),
+                    "start": str((d.first_filed - pd.Timedelta(days=days_before)).date()),
+                    "end": str((d.first_filed + pd.Timedelta(days=days_after)).date())})
+    return out
+
+
+def pick_second(deals: pd.DataFrame, hits_8k: pd.DataFrame | None, hits: pd.DataFrame | None) -> pd.DataFrame:
+    """A second document for each deal, never from the filing the terms were read from: the
+    target's earliest 8-K hit (press release before the 8-K itself before the agreement), else
+    another target-side merger filing (another form first, main documents first)."""
+    cols = ["deal_id", "second_adsh", "second_file", "second_form", "second_kind", "second_filed"]
+    if deals is None or not len(deals):
+        return pd.DataFrame(columns=cols)
+    base = deals[["deal_id", "target_cik", "doc_adsh", "doc_form", "first_filed", "last_filed"]]
+    parts = []
+    if hits_8k is not None and len(hits_8k):
+        h = hits_8k.merge(base, left_on="key", right_on="deal_id")
+        h = h[h["adsh"].astype(str).ne(h["doc_adsh"].astype(str)) & h["file_name"].astype(str).ne("")]
+        ft = h["file_type"].astype(str).str.upper()
+        h = h.assign(rank=np.select([ft.str.startswith("EX-99"), ft.str.startswith("8-K"), ft.str.startswith("EX-2")],
+                                    [0, 1, 2], default=3), second_kind="8-K announcement",
+                     form=h["form"].fillna(h["root_form"]).fillna("8-K"))
+        parts.append(h.sort_values(["deal_id", "file_date", "rank"]).drop_duplicates("deal_id"))
+    if hits is not None and len(hits):
+        x = hits.assign(cik=hits["ciks"].astype(str).str.split(";")).explode("cik")
+        x = x[x["cik"].astype(str).str.isdigit()].astype({"cik": "int64"})
+        h = x.merge(base.dropna(subset=["target_cik"]).astype({"target_cik": "int64"}), left_on="cik", right_on="target_cik")
+        h = h[(h["file_date"] >= h["first_filed"] - pd.Timedelta(days=30))
+              & (h["file_date"] <= h["last_filed"] + pd.Timedelta(days=1))
+              & h["adsh"].astype(str).ne(h["doc_adsh"].astype(str))]
+        form = h["form"].fillna(h["root_form"]).astype(str)
+        same = form.str.replace("/A", "", regex=False).eq(h["doc_form"].astype(str).str.replace("/A", "", regex=False))
+        exhibit = ~h["file_type"].astype(str).str.upper().eq(form.str.upper())
+        h = h.assign(form=form, same=same, exhibit=exhibit, second_kind="other merger filing")
+        parts.append(h.sort_values(["deal_id", "exhibit", "same", "file_date"]).drop_duplicates("deal_id"))
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    out = pd.concat(parts, ignore_index=True).drop_duplicates("deal_id")          # the 8-K first
+    out = out.rename(columns={"adsh": "second_adsh", "file_name": "second_file", "form": "second_form",
+                              "file_date": "second_filed"})
+    return out[cols].reset_index(drop=True)
+
+
+def read_second(deals: pd.DataFrame, picks: pd.DataFrame, *, client=None, cache_dir, offline: bool = False,
+                log=print, save_every: int = 50) -> tuple[pd.DataFrame, dict]:
+    """The same terms from each deal's second document, with the stated deal value."""
+    cache_dir = Path(cache_dir)
+    docs = cache_dir / "docs"
+    stats = {"deals": int(len(deals)), "with_second": int(len(picks)), "cached": 0, "read": 0, "missing": 0, "failed": 0}
+    old = load_table(cache_dir / "second")
+    have = {}
+    if old is not None and len(old) and "second_version" in old.columns:
+        old = old[old["second_version"] == SECOND_VERSION]
+        have = {(r["deal_id"], r["second_adsh"], r["second_file"]): r for r in old.to_dict("records")}
+    cik = dict(zip(deals["deal_id"], deals["target_cik"])) if len(deals) else {}
+    rows, done = [], []
+
+    def flush():
+        if done:
+            keys = {(r["deal_id"], r["second_adsh"], r["second_file"]) for r in done}
+            save_table(pd.DataFrame([r for k, r in have.items() if k not in keys] + done).reindex(columns=SECOND_COLUMNS),
+                       cache_dir / "second")
+
+    for p in picks.itertuples():
+        key = (p.deal_id, p.second_adsh, p.second_file)
+        if key in have:
+            rows.append(have[key])
+            stats["cached"] += 1
+            continue
+        rec = {"deal_id": p.deal_id, "second_adsh": p.second_adsh, "second_file": p.second_file,
+               "second_form": p.second_form, "second_kind": p.second_kind, "second_filed": p.second_filed}
+        try:
+            url = document_url(int(cik[p.deal_id]), str(p.second_adsh), str(p.second_file))
+            text = _cached_text(client, url, docs / f"{p.second_adsh}_{_safe(p.second_file)}.txt.gz", offline,
+                                transform=html_to_text)
+        except SecAccessError:
+            raise
+        except Exception as exc:
+            stats["failed"] += 1
+            rows.append({**rec, "second_error": f"{type(exc).__name__}: {str(exc)[:120]}"})
+            continue
+        if text is None:
+            stats["missing"] += 1
+            rows.append({**rec, "second_url": url, "second_error": "not available"})
+            continue
+        t, v = extract_terms(text), extract_deal_value(text)
+        rec.update({"second_url": url, "second_offer_price": t["offer_price"], "second_price_snippet": t["price_snippet"],
+                    "second_equity_commitment_usd": t["equity_commitment_usd"],
+                    "second_debt_commitment_usd": t["debt_commitment_usd"],
+                    "second_sponsors": "; ".join(sponsors_named(text)), "second_deal_value_usd": v["deal_value_usd"],
+                    "second_deal_value_kind": v["deal_value_kind"], "second_value_snippet": v["value_snippet"],
+                    "second_text_chars": t["text_chars"], "second_version": SECOND_VERSION})
+        rows.append(rec)
+        done.append(rec)
+        stats["read"] += 1
+        if stats["read"] % save_every == 0:
+            flush()
+            if log:
+                log(f"  second documents read: {stats['read']:,} of {len(picks):,}")
+    flush()
+    out = pd.DataFrame(rows).reindex(columns=SECOND_COLUMNS)
+    out["second_filed"] = pd.to_datetime(out["second_filed"], errors="coerce").astype("datetime64[ns]")
+    return out.astype({"deal_id": "object"}), stats
+
+
+def _compare(a: pd.Series, b: pd.Series, tol: float) -> pd.Series:
+    a, b = pd.to_numeric(a, errors="coerce"), pd.to_numeric(b, errors="coerce")
+    close = (a - b).abs() <= tol * np.maximum(a.abs(), b.abs())
+    return pd.Series(np.select([a.notna() & b.notna() & close, a.notna() & b.notna(), a.notna() | b.notna()],
+                               ["agree", "disagree", "one source"], default="none"), index=a.index)
+
+
+def cross_check(deals: pd.DataFrame, *, price_tol: float = 0.005, value_tol: float = 0.15,
+                commitment_tol: float = 0.01) -> pd.DataFrame:
+    """Compare each deal's terms with its second document. Per term: agree, disagree, one
+    source, none. The stated deal value agrees when it is within `value_tol` of the equity
+    value or the enterprise value computed at the offer price (announcements quote either).
+    Commitments are compared only against another merger filing (announcements rarely give
+    them). check_flag: disagree if any term disagrees, agree if at least one agrees."""
+    d = deals.copy()
+    for c in (*SECOND_COLUMNS[1:], "offer_price", "sponsor", "equity_value", "enterprise_value",
+              "equity_commitment_usd", "debt_commitment_usd"):
+        if c not in d.columns:
+            d[c] = "" if c in ("sponsor", "second_sponsors", "second_kind") else np.nan
+    d["check_price"] = _compare(d["offer_price"], d["second_offer_price"], price_tol)
+    first = d["sponsor"].fillna("").astype(str)
+    second = d["second_sponsors"].fillna("").astype(str)
+    named = pd.Series([f != "" and f in s.split("; ") for f, s in zip(first, second)], index=d.index, dtype=bool)
+    d["check_sponsor"] = np.select([named, first.ne("") & second.ne(""), first.ne("") | second.ne("")],
+                                   ["agree", "disagree", "one source"], default="none")
+    stated = pd.to_numeric(d["second_deal_value_usd"], errors="coerce")
+    by_equity, by_ev = _compare(d["equity_value"], stated, value_tol), _compare(d["enterprise_value"], stated, value_tol)
+    d["check_value"] = np.select([by_equity.eq("agree") | by_ev.eq("agree"),
+                                  by_equity.eq("disagree") | by_ev.eq("disagree"),
+                                  by_equity.eq("one source") | by_ev.eq("one source")],
+                                 ["agree", "disagree", "one source"], default="none")
+    other = d["second_kind"].fillna("").astype(str).eq("other merger filing")
+    for term in ("equity", "debt"):
+        c = _compare(d[f"{term}_commitment_usd"], d[f"second_{term}_commitment_usd"].where(other), commitment_tol)
+        d[f"check_{term}"] = c
+    terms = d[CHECK_COLUMNS[:-1]]
+    d["check_flag"] = np.select([terms.eq("disagree").any(axis=1).to_numpy(dtype=bool),
+                                 terms.eq("agree").any(axis=1).to_numpy(dtype=bool)],
+                                ["disagree", "agree"], default="unchecked")
+    return d
+
+
+def check_sample(deals: pd.DataFrame, n: int = 30, seed: int = 0) -> list:
+    """`n` deals to read, drawn by a hash of the seed and the deal id – nobody chooses them,
+    and a deal keeps its place when the sample grows. Pool: completed deals whose document
+    was read (every read deal when none is completed)."""
+    import hashlib
+    if deals is None or not len(deals) or "text_chars" not in deals.columns:
+        return []
+    pool = deals[pd.to_numeric(deals["text_chars"], errors="coerce").fillna(0) > 0]
+    if "completed" in pool.columns and pool["completed"].fillna(False).astype(bool).any():
+        pool = pool[pool["completed"].fillna(False).astype(bool)]
+    ids = sorted(pool["deal_id"].astype(str), key=lambda i: hashlib.sha256(f"{int(seed)}:{i}".encode()).hexdigest())
+    return ids[:int(n)]
+
+
+def _money(v) -> str:
+    v = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    if pd.isna(v):
+        return "n/a"
+    return f"${v / 1e9:.2f}bn" if abs(v) >= 1e9 else f"${v / 1e6:.1f}m" if abs(v) >= 1e6 else f"${v:,.0f}"
+
+
+def _num(v) -> str:
+    v = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    return "n/a" if pd.isna(v) else f"{v:g}"
+
+
+def _txt(v) -> str:
+    return "" if v is None or v is pd.NaT or v is pd.NA or (isinstance(v, float) and np.isnan(v)) else str(v)
+
+
+def check_sheet(deals: pd.DataFrame, ids: list) -> pd.DataFrame:
+    """The reading sheet: one row per sampled deal and term – the extracted value, the passage
+    it came from, the second document's value and passage, and the comparison."""
+    cols = ["n", "deal_id", "target_name", "term", "extracted", "passage", "source_url", "second_kind", "second_value",
+            "second_passage", "second_url", "check", "reader_verdict", "reader_note"]
+    if not ids:
+        return pd.DataFrame(columns=cols)
+    by = deals.assign(deal_id=deals["deal_id"].astype(str)).set_index("deal_id")
+    rows = []
+    for n, i in enumerate(ids, 1):
+        r = by.loc[i]
+        g = lambda c: r.get(c) if c in by.columns else None  # noqa: E731
+        common = {"n": n, "deal_id": i, "target_name": _txt(g("target_name")), "source_url": _txt(g("doc_url")),
+                  "second_kind": _txt(g("second_kind")), "second_url": _txt(g("second_url")),
+                  "reader_verdict": "", "reader_note": ""}
+        value = (f"{_money(g('second_deal_value_usd'))} ({_txt(g('second_deal_value_kind'))})"
+                 if _money(g("second_deal_value_usd")) != "n/a" else "n/a")
+        for term, extracted, passage, second, second_passage, check in (
+                ("offer price", _num(g("offer_price")), g("price_snippet"), _num(g("second_offer_price")),
+                 g("second_price_snippet"), g("check_price")),
+                ("equity commitment", _money(g("equity_commitment_usd")), g("equity_snippet"),
+                 _money(g("second_equity_commitment_usd")), "", g("check_equity")),
+                ("debt commitment", _money(g("debt_commitment_usd")), g("debt_snippet"),
+                 _money(g("second_debt_commitment_usd")), "", g("check_debt")),
+                ("sponsor", _txt(g("sponsor")) or "n/a", g("sponsor_snippet"), _txt(g("second_sponsors")) or "n/a", "",
+                 g("check_sponsor")),
+                ("deal value", f"equity {_money(g('equity_value'))}, enterprise {_money(g('enterprise_value'))}",
+                 "offer price × shares; less net cash", value, g("second_value_snippet"), g("check_value"))):
+            rows.append({**common, "term": term, "extracted": extracted, "passage": _txt(passage),
+                         "second_value": second, "second_passage": _txt(second_passage), "check": _txt(check)})
+    return pd.DataFrame(rows, columns=cols)
+
+
+def check_lines(deals: pd.DataFrame, ids: list) -> list[str]:
+    """The reading sheet as text for the paste block: per deal a header, then one line per term."""
+    sheet = check_sheet(deals, ids)
+    if not len(sheet):
+        return []
+    by = deals.assign(deal_id=deals["deal_id"].astype(str)).set_index("deal_id")
+    lines = []
+    for (n, i), g in sheet.groupby(["n", "deal_id"], sort=True):
+        r, h = by.loc[i], g.iloc[0]
+        filed = pd.to_datetime(r.get("first_filed"), errors="coerce")
+        lines.append(f"CHECK {n:02d}  {i} · {h['target_name']} · {_txt(r.get('doc_form'))} · first filed "
+                     f"{'n/a' if pd.isna(filed) else filed.date()} · {h['source_url'] or 'no document'}")
+        second_filed = pd.to_datetime(r.get("second_filed"), errors="coerce") if "second_filed" in by.columns else pd.NaT
+        lines.append(f"  second source: {h['second_kind'] or 'none found'}"
+                     + (f" · {_txt(r.get('second_form'))} filed {second_filed.date()}" if pd.notna(second_filed) else "")
+                     + (f" · {h['second_url']}" if h["second_url"] else ""))
+        for x in g.itertuples():
+            line = f"  {x.term}: {x.extracted}"
+            if x.passage:
+                line += f" | «{x.passage}»"
+            if x.second_value != "n/a" or x.second_passage:
+                line += f" || second: {x.second_value}" + (f" | «{x.second_passage}»" if x.second_passage else "")
+            lines.append(line + f" [{x.check or 'none'}]")
+    return lines
+
+
+def check_summary(deals: pd.DataFrame, ids: list, seed: int) -> dict:
+    """Counts for the paste block: second documents found and agreement by term, all deals."""
+    if deals is None or not len(deals) or "check_flag" not in deals.columns:
+        return {}
+    kind = deals["second_kind"].fillna("").astype(str)
+    read = pd.to_numeric(deals["second_text_chars"], errors="coerce").fillna(0) > 0
+    out = {"deals": int(len(deals)), "second_8k": int((kind.eq("8-K announcement") & read).sum()),
+           "second_other_filing": int((kind.eq("other merger filing") & read).sum()),
+           "second_none": int((~read).sum())}
+    for term in ("price", "sponsor", "value", "equity", "debt"):
+        c = deals[f"check_{term}"].value_counts()
+        both = int(c.get("agree", 0) + c.get("disagree", 0))
+        out[term] = (f"{int(c.get('agree', 0))} of {both} agree" if both else "no pairs")
+    out["deals_flagged"] = int(deals["check_flag"].eq("disagree").sum())
+    out["deals_confirmed"] = int(deals["check_flag"].eq("agree").sum())
+    out["reading_sample"] = f"{len(ids)} deals, seed {seed}"
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -127,3 +127,12 @@ def test_hits_outside_the_window_are_dropped_even_if_the_endpoint_ignores_dates(
     out, st = fts.search('"x"', ["DEFM14A"], "2014-01-01", "2016-12-31", client=client, today=date(2026, 1, 1), log=None)
     assert sorted(out["file_name"]) == ["d2014.htm", "d2015.htm", "d2016.htm"] and st["windows"] == 3
     assert all("dateRange=custom" in u for u in client.urls)
+
+
+def test_search_many_can_restrict_a_query_to_one_filer_and_keys_it_separately(tmp_path):
+    client = FakeFTS([_hit("0000000001-20-000001", "ex991.htm", [42], "8-K", "2020-01-10", file_type="EX-99.1")])
+    q = {"key": "42-20200301", "q": '"merger agreement"', "forms": ["8-K"], "start": "2019-10-01", "end": "2020-03-31"}
+    hits, st = fts.search_many([{**q, "ciks": 42}], client=client, cache_path=tmp_path / "many")
+    assert len(hits) == 1 and "ciks=0000000042" in client.urls[0]
+    _, st2 = fts.search_many([{**q, "ciks": 42}, q], client=client, cache_path=tmp_path / "many")
+    assert st2["cached"] == 1 and st2["fetched"] == 1 and "ciks=" not in client.urls[-1]

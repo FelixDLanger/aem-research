@@ -192,6 +192,9 @@ subs, facts, series = None, None, {}
 form25 = merger = dereg = ipo = None
 FEATURES = load_table(paths.cache / "features")
 DELIST = load_table(paths.cache / "delistings")
+REPORT["sec_user_agent"] = ("offline" if OFFLINE else
+                            ua_origin if ua_origin != "generic" else
+                            "generic – the SEC_USER_AGENT secret is not readable here (key icon: notebook access on)")
 """, body="""
 print(f"SEC user agent: {ua_origin}")
 if FEATURES is None:
@@ -293,6 +296,35 @@ print(REPORT["entry"])
 """)
 
 md("""
+## A5b – Check of the terms: a second filing for every deal, 30 deals to read
+
+The terms are heuristics, so they are checked twice. **Every deal:** the same terms are read from a second document – the target's own 8-K around the announcement (the press release or the merger agreement; one full-text search per deal), else another merger filing of the deal – and each term is marked agree, disagree or one source; the announcement's stated deal value is compared with the value computed at the offer price. **30 deals:** drawn by a hash of a fixed seed and the deal id, so nobody chooses them; for each, the block and the Check 30 sheet show every extracted value with the passage it came from, to be read against the text.
+""")
+
+phase("A5b check", before="""
+# ── A5b · Check ──
+CHECK_IDS, CHECK_SHEET = [], None
+""", body="""
+v = cfg_a.get("validation")
+second_hits, second_st = fts.search_many(tp.second_queries(DEALS, days_before=v["second_source"]["days_before"],
+                                                           days_after=v["second_source"]["days_after"]),
+                                         client=client, cache_path=A_DIR / "fts_second", offline=OFFLINE)
+picks = tp.pick_second(DEALS, second_hits, hits)
+second, second_doc_st = tp.read_second(DEALS, picks, client=client, cache_dir=A_DIR, offline=OFFLINE)
+DEALS = tp.cross_check(DEALS.merge(second, on="deal_id", how="left"), price_tol=v["price_tolerance"],
+                       value_tol=v["value_tolerance"], commitment_tol=v["commitment_tolerance"])
+CHECK_IDS = tp.check_sample(DEALS, n=v["reading_sample"]["n"], seed=v["reading_sample"]["seed"])
+CHECK_SHEET = tp.check_sheet(DEALS, CHECK_IDS)
+REPORT["check"] = {**tp.check_summary(DEALS, CHECK_IDS, v["reading_sample"]["seed"]),
+                   "searches": f"{second_st['queries']} ({second_st['cached']} cached, {second_st['fetched']} fetched, "
+                               f"{second_st['missing']} missing)",
+                   "second_documents": f"{second_doc_st['read'] + second_doc_st['cached']} read, "
+                                       f"{second_doc_st['missing']} missing, {second_doc_st['failed']} failed"}
+REPORT["check_lines"] = tp.check_lines(DEALS, CHECK_IDS)
+print(REPORT["check"])
+""")
+
+md("""
 ## A6 – Exits: which became public again (detection only)
 
 Three routes leave a public trace: the company still files 10-Ks (registered debt – post-buyout financials), it re-lists (an S-1 or 424B prospectus under a matching name), or a listed buyer acquires it (an 8-K "completion of acquisition" naming it; one full-text search per deal). Only the route is shown; exit dates and values wait for Paper A's lock.
@@ -379,7 +411,14 @@ DEAL_COLS = ["deal_id", "target_cik", "target_name", "sic", "announce_year", "fi
              "entry_tightening_2y_12m", "entry_credit_spread_baa", "entry_inflation_cpi_yoy", "exit_route",
              "post_buyout_financials"]
 REVIEW_COLS = ["deal_id", "target_name", "doc_url", "offer_price", "price_snippet", "equity_commitment_usd",
-               "equity_snippet", "debt_commitment_usd", "debt_snippet", "sponsor", "sponsor_mentions", "doc_error"]
+               "equity_snippet", "debt_commitment_usd", "debt_snippet", "sponsor", "sponsor_mentions", "sponsor_snippet",
+               "doc_error"]
+CROSS_COLS = ["deal_id", "target_name", "check_flag", "check_price", "offer_price", "second_offer_price",
+              "check_sponsor", "sponsor", "second_sponsors", "check_value", "equity_value", "enterprise_value",
+              "second_deal_value_usd", "second_deal_value_kind", "check_equity", "equity_commitment_usd",
+              "second_equity_commitment_usd", "check_debt", "debt_commitment_usd", "second_debt_commitment_usd",
+              "second_kind", "second_form", "second_filed", "doc_url", "second_url", "price_snippet",
+              "second_price_snippet", "second_value_snippet", "second_error"]
 EXIT_COLS = ["deal_id", "target_name", "completed", "completion_evidence", "exit_route", "post_buyout_financials",
              "reipo_company", "reipo_form", "buyer_name", "sale_adsh"]
 """, body="""
@@ -391,9 +430,16 @@ if WSIB is not None and len(WSIB):
 summary = {"run (UTC)": REPORT["generated_utc"], "repo commit": COMMIT, "Paper A config sha256": cfg_a.sha256,
            "lock status": cfg_a.status, "blinding": "counts and entry-side data only until Paper A's lock (A2)",
            **{f"{sec_}: {k}": v for sec_ in ("inputs", "search", "deals", "entry", "exits", "bench", "wsib")
-              for k, v in (REPORT.get(sec_) or {}).items()}}
+              for k, v in (REPORT.get(sec_) or {}).items()},
+           **{f"check: {k}": v for k, v in (REPORT.get("check") or {}).items()}}
 wsib_cols = [c for c in (WSIB.columns if WSIB is not None else []) if c not in wsib.OUTCOME_COLUMNS]
+cross = pick(DEALS, CROSS_COLS)
+if cross is not None and "check_flag" in cross.columns:      # disagreements first
+    cross = cross.sort_values("check_flag", key=lambda c: c.map({"disagree": 0, "unchecked": 1, "agree": 2}).fillna(3),
+                              kind="mergesort")
 sheets = {"Summary": summary, "Deals": pick(DEALS, DEAL_COLS), "Review": pick(DEALS, REVIEW_COLS),
+          "Cross-check": cross if cross is not None and "check_flag" in cross.columns else None,
+          "Check 30": CHECK_SHEET,
           "Exit routes": pick(DEALS, EXIT_COLS), "Benchmark": BENCH,
           "Search hits": pick(hits, ["adsh", "form", "file_type", "file_date", "names", "ciks", "file_name"]),
           "WSIB funds": pick(WSIB, wsib_cols), "WSIB counts": WSIB_COUNTS}
@@ -416,7 +462,7 @@ md("""
 ## Next steps
 
 1. **Paste the block** into the chat.
-2. **Hand-check:** I draw 30 deals at random from the Review sheet and check the offer price, the commitments and the sponsor against the filings it links to (target: 90% correct).
+2. **Check of the terms:** the block carries the 30 seeded deals with every value and its passage – I read them against the text (target: 90% correct) – and the CHECK line counts, for every deal, where the second filing agrees. You look only at the deals where the two sources or my reading disagree (the Cross-check sheet lists them first).
 3. **Sample rules and hypotheses:** we fix the rules in `config/paper_a.yaml`, agree the draft hypotheses, and lock Paper A – the public timestamp.
 4. **After the lock:** exit values (re-IPO valuations, sale prices, post-buyout financials), the value bridge by entry regime, WSIB net returns by vintage; the PCRI proposal runs in parallel.
 """)

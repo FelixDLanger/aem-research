@@ -181,7 +181,7 @@ def search(q: str, forms=(), start="2001-01-01", end=None, *, client=None, cache
 
 def search_many(queries: list[dict], *, client=None, cache_path=None, offline: bool = False,
                 max_hits: int = 100, save_every: int = 100, log=print) -> tuple[pd.DataFrame, dict]:
-    """Run many small queries ({"key", "q", "forms", "start", "end"}), first page only by
+    """Run many small queries ({"key", "q", "forms", "start", "end", optional "ciks"}), first page only by
     default; results are cached in one table keyed by `key` plus the query text."""
     cache_path = Path(cache_path) if cache_path is not None else None
     cached = load_table(cache_path) if cache_path is not None else None
@@ -197,8 +197,12 @@ def search_many(queries: list[dict], *, client=None, cache_path=None, offline: b
         if cache_path is not None:
             save_table(done, cache_path)
 
+    def qkey_of(qd):                               # the filer filter joins the key only where it is used
+        extra = [f"cik{int(qd['ciks'])}"] if qd.get("ciks") is not None else []
+        return _key(qd["key"], qd["q"], ",".join(qd.get("forms", ())), qd.get("start"), qd.get("end"), *extra)
+
     for i, qd in enumerate(queries):
-        qkey = _key(qd["key"], qd["q"], ",".join(qd.get("forms", ())), qd.get("start"), qd.get("end"))
+        qkey = qkey_of(qd)
         if qkey in seen:
             stats["cached"] += 1
             continue
@@ -206,7 +210,7 @@ def search_many(queries: list[dict], *, client=None, cache_path=None, offline: b
             stats["missing"] += 1
             continue
         hits, total, _rel, _pages = fetch(client, qd["q"], qd.get("forms", ()), qd.get("start"), qd.get("end"),
-                                         max_hits=max_hits)
+                                         max_hits=max_hits, ciks=qd.get("ciks"))
         if hits.empty:                             # remember empty answers too
             hits = _frame([{"adsh": "", "file_name": "", "ciks": "", "names": "", "form": None,
                             "root_form": None, "file_type": None, "file_date": None, "sics": ""}], qd["q"])
@@ -220,7 +224,7 @@ def search_many(queries: list[dict], *, client=None, cache_path=None, offline: b
             if log:
                 log(f"  {stats['fetched']:,} of {len(queries):,} searches done")
     flush()
-    keys = {_key(qd["key"], qd["q"], ",".join(qd.get("forms", ())), qd.get("start"), qd.get("end")) for qd in queries}
+    keys = {qkey_of(qd) for qd in queries}
     out = done[done["qkey"].astype(str).isin(keys) & done["adsh"].astype(str).ne("")].reset_index(drop=True)
     if len(out):
         out["file_date"] = pd.to_datetime(out["file_date"], errors="coerce").astype("datetime64[ns]")
