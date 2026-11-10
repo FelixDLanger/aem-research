@@ -39,6 +39,15 @@ decisions:
       Surprises are welcome, reported as exploratory with every analysis tried, and
       confirmed on data they were not found in before they are stated as findings.
 
+  - id: A4
+    topic: sponsor deals and the comparison group
+    status: decided by Felix on Nov 10, 2026
+    decision: >-
+      The search finds every buyer that used an equity commitment letter. Deals with a
+      sponsor (named, or private equity wording near the buyer) are the core sample;
+      deals with a strategic or unclear buyer stay in as a flagged comparison group;
+      SPAC mergers are not take-privates and are excluded.
+
 review_before_lock:
   - >-
     Run notebook 02 once (counts only) and check, by announcement year, how many deals
@@ -79,12 +88,20 @@ sample:
   completion_window_months: 18
   current_filer_months: 15
   value_bridge_excludes_sic: [6000, 6799]     # banks, insurers, REITs: EBITDA is not meaningful
+  buyer_types:                                # decision A4
+    sponsor: a listed sponsor named with an affiliation cue (affiliate of, formed by, managed by, led by …)
+    sponsor_not_on_the_list: private equity wording within 200 characters after the buyer's name, at least twice
+    private_equity_cues: 2
+    strategic_or_unclear: neither – the flagged comparison group
+    spac_merger: SIC 6770 or at least this many mentions of a trust account – excluded
+    spac_trust_account_mentions: 5
 
 validation:
   decided: by Felix on Nov 10, 2026 (the check runs in the notebook; Claude reads the 30, Felix the disagreements)
   reading_sample:
     n: 30
-    seed: 20261110
+    seed: 20261111
+    development_seeds: [20261110]   # read on Nov 10: price 97%, equity 76%, debt 42%, sponsor 61% – the extractors were rebuilt on these, so a fresh sample confirms
     draw: >-
       completed deals whose document was read, ordered by SHA-256 of "seed:deal_id";
       the first 30. Each is shown with every extracted value and the passage it came from.
@@ -108,7 +125,7 @@ entry:
     trailing operating income plus depreciation and amortization; amortization of
     intangibles added when only depreciation is tagged; pre-tax income plus interest
     as the fallback
-  enterprise_value: offer price × cover-page shares + debt − cash
+  enterprise_value: offer price × cover-page shares + debt − cash; unknown where the filing tags no debt at all
   leverage: largest debt amount committed / entry EBITDA (approximate, hand-checked)
 
 exits:

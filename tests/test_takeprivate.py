@@ -38,7 +38,7 @@ def test_terms_pick_the_offer_price_commitments_and_sponsor_with_their_sentences
     assert t["equity_commitment_usd"] == 1_250_000_000                 # not the $95 million termination fee
     assert "equity commitment letter" in t["equity_snippet"]
     assert t["debt_commitment_usd"] == 900_000_000 and "term loan" in t["debt_snippet"]
-    assert t["sponsor"] == "Thoma Bravo" and t["sponsor_mentions"] >= 4
+    assert t["sponsor"] == "Thoma Bravo" and t["sponsor_mentions"] >= 2       # mentions that say who owns the buyer
     empty = tp.extract_terms("A strategic merger paid in stock.")
     assert np.isnan(empty["offer_price"]) and empty["sponsor"] == "" and np.isnan(empty["equity_commitment_usd"])
 
@@ -342,3 +342,125 @@ def test_the_reading_sample_is_seeded_stable_and_shown_with_its_passages(tmp_pat
     assert any(x.startswith("  equity commitment: $1.25bn | «e1» [one source]") for x in lines)
     assert any("deal value: equity $2.00bn, enterprise $2.60bn" in x for x in lines)
     assert tp.check_lines(deals, []) == [] and len(tp.check_sheet(deals, [])) == 0
+
+
+# ---- the first reading sample's misses (seed 20261110): sentences from the filings, shortened
+
+NOT_A_COMMITMENT = [
+    # a rival bidder's figure
+    "Bidder A's total debt and equity commitment equaled approximately $129.2 million, less than the full amount.",
+    # a termination fee next to the equity commitment letter
+    "the payment by us of a termination fee to Parent of $7,750,000; the possibility that the merger might be delayed "
+    "if the party to the equity commitment letter does not fulfill its commitment;",
+    # a damages cap
+    "Parent's and Merger Sub's aggregate liability for monetary damages for breaches of the merger agreement are capped "
+    "at $140.0 million, plus certain reimbursement obligations under the equity commitment letter.",
+    # the total bill, funded by the financing
+    "We anticipate that the total amount of funds necessary to complete the Merger will be approximately $1.6 billion, "
+    "which will be funded via equity financing and debt financing described below.",
+    # a guaranty cap
+    "The obligations of Vista Fund VI under the Limited Guaranty are subject to an aggregate cap equal to $116.3 million. "
+    "The debt commitment letter is described below.",
+    # an adviser's fees
+    "the aggregate fees recognized by J.P. Morgan from affiliates of Thoma Bravo were approximately $105.0 million. "
+    "J.P. Morgan may trade the debt and equity securities and arrange debt financing for them.",
+    # the target's own credit line
+    "In August 2011, the Company exercised the $25 million accordion feature of the Credit Facility, increasing the size "
+    "of the facility to $150 million.",
+    # an indication of interest in the background section
+    "Nordic Capital X would be able to support a $3.5 billion equity commitment and secure $3 billion of debt financing "
+    "commitments that was outlined in its most recent indication of interest.",
+    # another deal the adviser worked on
+    "as joint bookrunner with respect to the refinancing of the senior secured bank loan (aggregate principal amount "
+    "$985 million) of EquiPower Resources, an affiliate of Energy Capital Partners, under a debt commitment.",
+]
+
+
+@pytest.mark.parametrize("text", NOT_A_COMMITMENT)
+def test_fees_caps_rival_bids_and_total_funds_are_not_commitments(text):
+    t = tp.extract_terms(text)
+    assert np.isnan(t["equity_commitment_usd"]) and np.isnan(t["debt_commitment_usd"]), t
+
+
+COMMITMENTS = [
+    ("will be funded through a combination of cash held by the Company, up to $1.878 billion of equity financing (the "
+     "“Equity Commitment”) and up to $2.31 billion of debt financing on the closing date.", 1.878e9, 2.31e9),
+    ("the investment consortium led by STG committed to provide Parent with an equity investment of approximately "
+     "$1.17 billion to fund a portion of the aggregate merger consideration. The lenders have committed to provide debt "
+     "financing in an aggregate principal amount of up to $450 million.", 1.17e9, 450e6),
+    ("funded through a combination of committed debt financing, consisting of a senior secured 364-day bridge facility in "
+     "an aggregate principal amount of $5,750,000,000, and $2,300,000,000 from equity commitments.", 2.3e9, 5.75e9),
+    ("each Guarantor has committed to contribute to Parent at the closing of the Merger an aggregate amount in cash equal "
+     "to $88.05 million, subject to the terms and conditions set forth in an equity commitment letter dated April 16, "
+     "2023.", 88.05e6, np.nan),
+    ("Merger Sub has obtained debt financing commitments in an aggregate principal amount of up to $1.950 billion from "
+     "Barclays Bank PLC. Parent has entered into an equity commitment with an affiliate to provide committed equity "
+     "financing in an amount equal to $1.535 billion.", 1.535e9, 1.95e9),
+    ("the Lead Arranger has committed to provide (i) a $400,000,000 first lien term facility and (ii) a $50,000,000 "
+     "revolving facility under the Debt Commitment Letter.", np.nan, 400e6),
+    ("a cash equity investment by Platinum Fund IV of up to $500.0 million (which we refer to as the “cash equity "
+     "financing”). The rest is debt financing in an aggregate principal amount of approximately $2.890 billion.",
+     500e6, 2.89e9),
+]
+
+
+@pytest.mark.parametrize("text,equity,debt", COMMITMENTS)
+def test_each_commitment_takes_the_amount_its_own_sentence_gives_it(text, equity, debt):
+    t = tp.extract_terms(text)
+    assert t["equity_commitment_usd"] == pytest.approx(equity, nan_ok=True), t["equity_snippet"]
+    assert t["debt_commitment_usd"] == pytest.approx(debt, nan_ok=True), t["debt_snippet"]
+
+
+NOT_THE_OWNER = [
+    "April 15, 2016 Siris Capital Group, LLC Polycom, Inc. 1.05x March 15, 2016 magicJack VocalTec Ltd.",        # comparables
+    "Mr. McHugh previously served as a director, and the chairman of the audit committee, of Lone Star Technologies, Inc.",
+    "Canadian counsel at Stikeman Elliott LLP (“Stikeman”) and financial advisors at CIBCWM",
+    "Merger Sub has entered into a debt commitment letter with Apollo Global Funding, LLC; the debt financing is provided "
+    "by affiliates of Apollo Global Real Estate Management, L.P. (collectively, the “Lenders”)",
+    "Opinion of Macquarie Capital (USA) Inc. 7 Financing of the Merger",
+    "a representative of Evercore, financial advisor to Insight and affiliates of TPG Global, LLC, contacted the Board",
+]
+THE_OWNER = [
+    ("Parent and Merger Sub are entities that are affiliated with Nordic Capital Epsilon SCA", "Nordic Capital"),
+    ("which is beneficially owned by affiliates of The Veritas Capital Fund V, L.P.", "Veritas Capital"),
+    ("Buyer, an investment vehicle formed by Lone Star Fund XI, L.P. (“Lone Star”)", "Lone Star"),
+    ("Parent and Merger Sub are entities formed by an investment consortium led by STG Partners, LLC", "STG Partners"),
+    ("Parent is an affiliate of Symphony Technology Group", "STG Partners"),                   # one firm, two spellings
+    ("Newco and Merger Sub were formed by Elliott Associates, L.P.", "Elliott"),
+]
+
+
+@pytest.mark.parametrize("text", NOT_THE_OWNER)
+def test_lenders_advisers_law_firms_and_comparables_are_not_the_sponsor(text):
+    assert tp.extract_terms(text)["sponsor"] == ""
+
+
+@pytest.mark.parametrize("text,sponsor", THE_OWNER)
+def test_the_sponsor_is_the_firm_the_text_says_owns_the_buyer(text, sponsor):
+    assert tp.extract_terms(text)["sponsor"] == sponsor
+
+
+def test_buyers_are_typed_and_spac_mergers_leave_the_sample():
+    d = pd.DataFrame({"deal_id": list("abcde"), "sponsor": ["KKR", "", "", "", "KKR"], "pe_cues": [0, 2, 0, 0, 0],
+                      "trust_account_mentions": [0, 0, 0, 9, 0], "sic": [7372, 7372, 2600, 1311, 6770],
+                      "text_chars": [9, 9, 9, 9, 9]})
+    c = tp.classify_buyers(d)
+    assert c["buyer_type"].tolist() == ["sponsor", "sponsor not on the list", "strategic or unclear", "SPAC merger",
+                                        "SPAC merger"]
+    assert c["core_sample"].tolist() == [True, True, False, False, False]
+    assert c["comparison_group"].tolist() == [False, False, True, False, False]
+    assert tp.classify_buyers(d.assign(text_chars=0).iloc[2:3])["buyer_type"].tolist() == ["not read"]
+    assert len(tp.classify_buyers(d.iloc[0:0])) == 0
+    s = tp.summary(c.assign(target_cik=1, announce_year=2020, completed=True, fsds_filer=True, doc_is_main=True))
+    assert s["core_sample"] == 2 and s["comparison_group"] == 1 and "SPAC merger 2" in s["buyers"]
+    t = tp.extract_terms("Parent is a newly formed entity controlled by investment funds managed by a private equity firm. "
+                         + "the trust account " * 6)
+    assert t["pe_cues"] == 1 and t["trust_account_mentions"] == 6
+
+
+def test_enterprise_value_stays_unknown_where_the_filing_tags_no_debt():
+    d = pd.DataFrame({"offer_price": [10.0, 10.0], "shares_filing": [1e6, 1e6], "net_cash": [2e6, 2e6],
+                      "debt_missing": [False, True], "ebitda": [1e6, 1e6], "revenue": [5e6, 5e6]})
+    v = tp.entry_values(d)
+    assert v["enterprise_value"].tolist()[0] == 8e6 and np.isnan(v["enterprise_value"].iloc[1])
+    assert v["equity_value"].tolist() == [1e7, 1e7] and np.isnan(v["ev_ebitda"].iloc[1])

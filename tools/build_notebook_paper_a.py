@@ -267,12 +267,14 @@ print("Deals by announcement year:", REPORT["by_year"])
 md("""
 ## A4 – Terms from each deal's definitive document
 
-The definitive proxy (or 14D-9, 13E-3, information statement) is read once and kept on Drive as compressed text. Offer price, equity commitment, the largest debt amount committed and the sponsor are heuristics, so each keeps the sentence it came from: the Review sheet is for hand-checking.
+The definitive proxy (or 14D-9, 13E-3, information statement) is read once and kept on Drive as compressed text. Offer price, equity commitment, debt commitment and the sponsor are heuristics, so each keeps the sentence it came from. A commitment is the amount its own sentence gives it – not a fee, a cap, a rival bid or the total funds needed; the sponsor is the firm the text says owns the buyer – not a lender, an adviser or a comparable deal. Each deal gets a buyer type: sponsor, sponsor not on the list, strategic or unclear (the flagged comparison group) or SPAC merger (not a take-private; excluded).
 """)
 
 phase("A4 terms", body="""
 terms, doc_st = tp.read_documents(DEALS, client=client, cache_dir=A_DIR, offline=OFFLINE)
-DEALS = DEALS.merge(terms, on=["deal_id", "doc_adsh"], how="left")
+DEALS = tp.classify_buyers(DEALS.merge(terms, on=["deal_id", "doc_adsh"], how="left"),
+                           spac_trust_mentions=SAMPLE["buyer_types"]["spac_trust_account_mentions"],
+                           pe_cues=SAMPLE["buyer_types"]["private_equity_cues"])
 REPORT["documents"] = doc_st
 print(doc_st)
 """)
@@ -291,8 +293,9 @@ DEALS = pd.concat([DEALS.reset_index(drop=True), reg.reset_index(drop=True)], ax
 s = tp.summary(DEALS)
 REPORT["entry"] = {k: s[k] for k in ("document_read", "main_document", "offer_price_known", "ebitda_known",
                                      "ev_ebitda_known", "equity_commitment_known", "debt_commitment_known",
-                                     "sponsor_named") if k in s}
-print(REPORT["entry"])
+                                     "sponsor_named", "debt_tag_missing") if k in s}
+REPORT["buyers"] = {k: s[k] for k in ("core_sample", "comparison_group", "buyers") if k in s}
+print(REPORT["entry"], REPORT["buyers"])
 """)
 
 md("""
@@ -320,7 +323,9 @@ REPORT["check"] = {**tp.check_summary(DEALS, CHECK_IDS, v["reading_sample"]["see
                                f"{second_st['missing']} missing)",
                    "second_documents": f"{second_doc_st['read'] + second_doc_st['cached']} read, "
                                        f"{second_doc_st['missing']} missing, {second_doc_st['failed']} failed"}
-REPORT["check_lines"] = tp.check_lines(DEALS, CHECK_IDS)
+dev_ids = [i for seed_ in v["reading_sample"].get("development_seeds", [])
+           for i in tp.check_sample(DEALS.assign(buyer_type=""), n=v["reading_sample"]["n"], seed=seed_)]
+REPORT["check_lines"] = tp.check_lines(DEALS, CHECK_IDS) + tp.check_compact(DEALS, dev_ids)
 print(REPORT["check"])
 """)
 
@@ -407,7 +412,7 @@ DEAL_COLS = ["deal_id", "target_cik", "target_name", "sic", "announce_year", "fi
              "doc_form", "doc_url", "completed", "completion_date", "completion_evidence", "offer_price", "shares_filing",
              "shares_filing_kind", "shares_dei", "equity_value", "cash_total", "debt", "net_cash", "enterprise_value", "revenue", "operating_income", "dna",
              "ebitda", "ebitda_source", "ev_ebitda", "ev_revenue", "equity_commitment_usd", "debt_commitment_usd",
-             "leverage_x", "equity_share", "sponsor", "fin_filed", "period_end", "entry_real_yield_10y",
+             "leverage_x", "equity_share", "sponsor", "buyer_type", "core_sample", "comparison_group", "debt_missing", "fin_filed", "period_end", "entry_real_yield_10y",
              "entry_tightening_2y_12m", "entry_credit_spread_baa", "entry_inflation_cpi_yoy", "exit_route",
              "post_buyout_financials"]
 REVIEW_COLS = ["deal_id", "target_name", "doc_url", "offer_price", "price_snippet", "equity_commitment_usd",

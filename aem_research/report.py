@@ -187,7 +187,7 @@ def paper_a_block(report: dict) -> str:
         f"({r.get('lock_status', '')}) · {r.get('versions', {})}",
     ]
     for key, label in (("inputs", "INPUTS    "), ("index", "INDEX     "), ("search", "SEARCH    "),
-                       ("deals", "DEALS     "), ("entry", "ENTRY     "), ("exits", "EXITS     "),
+                       ("deals", "DEALS     "), ("buyers", "BUYERS    "), ("entry", "ENTRY     "), ("exits", "EXITS     "),
                        ("by_year", "BY YEAR   "), ("bench", "BENCH     "), ("regime", "REGIME    "),
                        ("wsib", "WSIB      "), ("check", "CHECK     ")):
         if r.get(key):

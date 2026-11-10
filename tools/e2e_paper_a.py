@@ -258,7 +258,9 @@ assert d4["second_form"] == "PREM14A" and d4["doc_form"] == "DEFM14A"
 assert (D["check_flag"] == "unchecked").sum() == EXPECT["deals"] - 3
 assert "CHECK     deals 8" in block and "second 8k 2 · second other filing 1" in block and "price 2 of 3 agree" in block
 ids = ns["CHECK_IDS"]
-assert ids == tp.check_sample(ns["DEALS"], 30, 20261110) and 1 <= len(ids) <= 30
+assert ids == tp.check_sample(ns["DEALS"], 30, ns["cfg_a"].get("validation")["reading_sample"]["seed"])
+assert 1 <= len(ids) <= 30 and sum(line.startswith("DEV ") for line in block.splitlines()) == len(ids)
+assert set(D["buyer_type"]) <= {"sponsor", "not read"} and "BUYERS    core sample 7" in block
 assert set(ids) <= set(D.index[D["completed"] & (D["text_chars"].fillna(0) > 0)])
 assert sum(line.startswith("CHECK 0") for line in block.splitlines()) == len(ids)
 assert "offer price: 10.5 | «" in block and "|| second: 10.5 | «" in block and "[agree]" in block and "[disagree]" in block

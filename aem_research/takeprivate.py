@@ -45,10 +45,11 @@ INDEX_SUBSETS = {"dereg": ("15-12B", "15-12G", "15-15D", "15-12B/A", "15-12G/A",
                  "ipo": ("S-1", "424B4", "424B1")}
 EXTRA_FLOWS = ("operating_income", "dna", "amortization", "pretax_income", "interest_expense")
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{name}"
-TERMS_VERSION = 2          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
+TERMS_VERSION = 3          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
 TERM_COLUMNS = ["deal_id", "doc_adsh", "main_file", "doc_url", "offer_price", "price_snippet", "price_mentions",
                 "equity_commitment_usd", "equity_snippet", "debt_commitment_usd", "debt_snippet", "sponsor",
-                "sponsor_mentions", "sponsor_snippet", "text_chars", "terms_version", "doc_error"]
+                "sponsor_mentions", "sponsor_snippet", "pe_cues", "trust_account_mentions", "text_chars", "terms_version",
+                "doc_error"]
 # Exit dates would give holding periods (an A-H3 outcome): cached, not shown before Paper A's lock.
 HIDDEN_UNTIL_LOCK = ["still_files_from", "reipo_date", "sale_date"]
 
@@ -67,8 +68,23 @@ SPONSORS = (
     "Symphony Technology", "STG Partners", "Arlington Capital", "Crestview", "Lindsay Goldberg", "New Mountain",
     "Stonepeak", "Global Infrastructure Partners", "I Squared", "Macquarie", "Blue Owl", "KPS Capital",
     "Wind Point", "Mill Point", "Searchlight Capital", "Rhône", "Bregal", "Vestar", "Riverstone", "EnCap",
+    "Energy Capital Partners", "ArchiMed", "Brightstar Capital", "SER Capital", "Baring Private Equity", "BPEA",
+    "Avista Capital", "Fortress", "Starwood Capital", "Roark Capital", "L Catterton", "General Atlantic",
+    "Bending Spoons", "Tailwind", "3G Capital", "Altaris", "Patient Square", "Nautic", "Trive Capital",
 )
+# Two spellings of one firm count as one sponsor.
+SPONSOR_ALIASES = {"Symphony Technology": "STG Partners", "Kohlberg Kravis Roberts": "KKR", "Evergreen Coast": "Elliott",
+                   "Searchlight Capital": "Searchlight", "BPEA": "Baring Private Equity"}
 _SPONSOR_RE = [(s, re.compile(r"(?<![A-Za-z])" + re.escape(s) + r"(?![a-z])")) for s in SPONSORS]
+# A sponsor is the buyer's owner only where the text says so: an affiliation cue right before
+# the name, and no sign that the name is a lender, an adviser, a law firm or a comparable deal.
+_SPONSOR_CUE = re.compile(r"affiliat\w*|controlled by|formed by|managed by|advised by|sponsored by|owned by|led by|"
+                          r"acquired by|backed by|portfolio compan\w+ of|consortium|funds? of", re.I)
+_SPONSOR_NOT = re.compile(r"financial advis|opinion of|lender|debt commitment|debt financing|bookrunner|arranger|"
+                          r"counsel|LLP|director of|served as|comparable|precedent|selected (?:transactions|companies)|"
+                          r"\bfees?\b|Stikeman", re.I)
+_PE_CUE = re.compile(r"\b(?:Parent|Purchaser|Buyer|Newco|Merger Sub|Acquiror)\b.{0,200}?"
+                     r"(?:private equity|investment funds?|funds? (?:managed|advised)|investment firm)", re.I)
 
 _MONEY = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(million|billion|thousand)?", re.I)
 _PRICE_PATTERNS = [
@@ -86,14 +102,28 @@ _VALUE_RE = re.compile(
     r"total (?:transaction |equity |enterprise )?(?:value|consideration) of)\s+(?:approximately |about |roughly )?"
     r"(?:US)?\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(million|billion)", re.I)
 # The check of the extracted terms: a second filing per deal and a seeded sample for reading.
-SECOND_VERSION = 1
+SECOND_VERSION = 2
 SECOND_QUERY = '"merger agreement" "per share"'
 SECOND_COLUMNS = ["deal_id", "second_adsh", "second_file", "second_form", "second_kind", "second_filed", "second_url",
                   "second_offer_price", "second_price_snippet", "second_equity_commitment_usd",
                   "second_debt_commitment_usd", "second_sponsors", "second_deal_value_usd", "second_deal_value_kind",
                   "second_value_snippet", "second_text_chars", "second_version", "second_error"]
 CHECK_COLUMNS = ["check_price", "check_sponsor", "check_value", "check_equity", "check_debt", "check_flag"]
-_DEBT_ANCHOR = re.compile(r"debt commitment|debt financing|committed (?:debt|financing)|(?:term loan|credit) facilit", re.I)
+_DEBT_ANCHOR = re.compile(r"debt commitment|debt financing|committed (?:debt )?financing|"
+                          r"(?:senior secured|first lien|second lien|bridge|term loan) (?:[\w\-]+ ){0,3}facilit", re.I)
+_EQUITY_ANCHOR = re.compile(r"equity commitment|equity financing|equity contribution|equity investment", re.I)
+_DEBT_WORD = re.compile(r"\bdebt\b|term loan|credit facilit|bridge|notes|lenders?", re.I)
+_EQUITY_WORD = re.compile(r"\bequity\b", re.I)
+_SENTENCE_END = re.compile(r"(?<=[a-z\)\]”\"'%])\.\s+(?=[A-Z“\"(•●])|\s[•●]\s")
+# Sentences that speak of something else: a rival bid, the total bill, an adviser's fees.
+_SENTENCE_SKIP = re.compile(r"Bidder [A-Z]\b|Party [A-Z]\b|indication of interest|"
+                            r"(?:revised|initial|non-binding|written|updated|preliminary|unsolicited) (?:proposal|offer|bid)|"
+                            r"total (?:amount of )?funds|funds (?:needed|necessary|required)|bookrunner|"
+                            r"financial advis|aggregate fees|fees (?:recognized|received|paid)", re.I)
+# Amounts that are not a commitment: fees, caps, guarantees, the target's own borrowings.
+_AMOUNT_SKIP = re.compile(r"termination fee|fee (?:of|equal)|\bfees\b|guarant|expense|reimburse|cap(?:ped)? (?:of|at|equal)|"
+                          r"aggregate cap|liabilit|damages|escrow|deposit|existing|outstanding|accordion|"
+                          r"Credit Facility|per share", re.I)
 _FEE_CONTEXT = re.compile(r"termination fee|fee of|fees|guarantee|expense|reimburse|cap of|escrow|deposit", re.I)
 
 
@@ -121,25 +151,44 @@ def _snippet(text: str, start: int, end: int, pad: int = 160) -> str:
     return " ".join(text[max(0, start - pad):min(len(text), end + pad)].split())
 
 
-def _amounts_near(text: str, anchor: re.Pattern, *, before: int = 100, after: int = 500, minimum: float = 1e6,
-                  stop: re.Pattern | None = None):
-    """Largest dollar amount near each anchor, skipping fees, guarantees and expense caps.
-    The window ends where `stop` begins (the debt paragraph must not lend the equity its amount)."""
+def _sentence_ends(text: str) -> list[int]:
+    return [m.start() for m in _SENTENCE_END.finditer(text)]
+
+
+def _committed(text: str, ends: list[int], anchor: re.Pattern, own: re.Pattern, other: re.Pattern, *,
+               reach: int = 300, minimum: float = 1e6, needs: re.Pattern | None = None):
+    """For each anchor the dollar amount that belongs to it: in the anchor's own sentence, the
+    nearest one ("$X of debt financing" first, then the next amount after the anchor, then
+    the one before). Skipped: sentences about rival bids, total funds or fees; amounts that
+    are fees, caps or guarantees; amounts the sentence gives to the other kind of financing."""
+    import bisect
     out = []
     for m in anchor.finditer(text):
-        lo, hi = max(0, m.start() - before), min(len(text), m.end() + after)
-        nxt = stop.search(text, m.end(), hi) if stop is not None else None
-        if nxt is not None:
-            hi = nxt.start()
+        i = bisect.bisect_right(ends, m.start())
+        lo = max(ends[i - 1] if i else 0, m.start() - reach)
+        hi = min(ends[i] if i < len(ends) else len(text), m.end() + reach)
+        sentence = text[lo:hi]
+        if _SENTENCE_SKIP.search(sentence) or (needs is not None and not needs.search(sentence)):
+            continue
         best = None
         for a in _MONEY.finditer(text, lo, hi):
-            if _FEE_CONTEXT.search(text[max(lo, a.start() - 60):a.start()]):
-                continue
             v = _usd(*a.groups())
-            if v >= minimum and (best is None or v > best[0]):
-                best = (v, a.start(), a.end())
+            before = text[max(lo, a.start() - 70):a.start()]
+            after = text[a.end():min(hi, a.end() + 35)].split("$")[0]      # up to the next amount
+            if v < minimum or _AMOUNT_SKIP.search(before):
+                continue
+            mine = own.search(after) is not None            # "$2.31 billion of debt financing" names its kind
+            if other.search(after) and not mine:
+                continue
+            if not mine and other.search(before[-45:]) and not own.search(before[-45:]):
+                continue                                    # "an equity investment of $1.17 billion" is not the debt
+            gap_before = m.start() - a.end()
+            rank = (0, gap_before) if 0 <= gap_before <= 30 else \
+                   (1, a.start() - m.end()) if a.start() >= m.end() else (2, gap_before)
+            if best is None or rank < best[0]:
+                best = (rank, v, a.start(), a.end())
         if best is not None:
-            out.append(best)
+            out.append(best[1:])
     return out
 
 
@@ -153,11 +202,14 @@ def _mode(values: list[tuple[float, int, int]]):
 
 
 def extract_terms(text: str) -> dict:
-    """Offer price, equity commitment, largest debt commitment and sponsor, each with its sentence."""
+    """Offer price, equity commitment, debt commitment and the sponsor that owns the buyer, each
+    with its sentence; and two counts for the buyer's type (private equity wording near the
+    buyer, mentions of a trust account – the mark of a SPAC merger)."""
     t = " ".join(text.split())
     out = {"offer_price": np.nan, "price_snippet": "", "price_mentions": 0, "equity_commitment_usd": np.nan,
            "equity_snippet": "", "debt_commitment_usd": np.nan, "debt_snippet": "", "sponsor": "",
-           "sponsor_mentions": 0, "sponsor_snippet": "", "text_chars": len(t)}
+           "sponsor_mentions": 0, "sponsor_snippet": "", "pe_cues": 0, "trust_account_mentions": 0,
+           "text_chars": len(t)}
     prices = []
     for pat in _PRICE_PATTERNS:
         for m in pat.finditer(t):
@@ -168,29 +220,49 @@ def extract_terms(text: str) -> dict:
     if best is not None:
         out["offer_price"], out["price_mentions"] = best[0], len(prices)
         out["price_snippet"] = _snippet(t, best[1], best[2])
-    eq = _mode(_amounts_near(t, re.compile(r"equity commitment|equity financing|equity contribution", re.I),
-                             stop=_DEBT_ANCHOR))
+    ends = _sentence_ends(t)
+    eq = _mode(_committed(t, ends, _EQUITY_ANCHOR, _EQUITY_WORD, _DEBT_WORD))
     if eq is not None:
         out["equity_commitment_usd"], out["equity_snippet"] = eq[0], _snippet(t, eq[1], eq[2])
-    debt = _amounts_near(t, _DEBT_ANCHOR)
-    if debt:
-        top = max(debt, key=lambda v: v[0])
-        out["debt_commitment_usd"], out["debt_snippet"] = top[0], _snippet(t, top[1], top[2])
-    found = [(s, len(rx.findall(t))) for s, rx in _SPONSOR_RE]
-    found = [f for f in found if f[1] > 0]
-    if found:
-        s, n = max(found, key=lambda f: (f[1], len(f[0])))
-        out["sponsor"], out["sponsor_mentions"] = s, n
-        first = dict(_SPONSOR_RE)[s].search(t)
-        out["sponsor_snippet"] = _snippet(t, first.start(), first.end(), pad=120)
+    debt = _mode(_committed(t, ends, _DEBT_ANCHOR, _DEBT_WORD, _EQUITY_WORD,
+                            needs=re.compile(r"commit|debt financing", re.I)))
+    if debt is not None:
+        out["debt_commitment_usd"], out["debt_snippet"] = debt[0], _snippet(t, debt[1], debt[2])
+    owners = _owning_sponsors(t)
+    if owners:
+        name, (n, start, end) = max(owners.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
+        out["sponsor"], out["sponsor_mentions"] = name, n
+        out["sponsor_snippet"] = _snippet(t, start, end, pad=120)
+    out["pe_cues"] = len(_PE_CUE.findall(t))
+    out["trust_account_mentions"] = len(re.findall(r"trust account", t, re.I))
     return out
 
 
+def _owning_sponsors(t: str) -> dict:
+    """Sponsors the text names as the buyer's owner: {name: (mentions with a cue, first start, first end)}."""
+    found = {}
+    for s, rx in _SPONSOR_RE:
+        name = SPONSOR_ALIASES.get(s, s)
+        for m in rx.finditer(t):
+            if not _SPONSOR_CUE.search(t[max(0, m.start() - 90):m.start()]):
+                continue
+            if _SPONSOR_NOT.search(t[max(0, m.start() - 150):min(len(t), m.end() + 12)]):
+                continue
+            n, a, b = found.get(name, (0, m.start(), m.end()))
+            found[name] = (n + 1, a, b) if a <= m.start() else (n + 1, m.start(), m.end())
+    return found
+
+
 def sponsors_named(text: str) -> list[str]:
-    """Every known sponsor the text names, most mentioned first."""
+    """Every known sponsor the text names, most mentioned first (two spellings count once)."""
     t = " ".join(str(text).split())
-    found = [(s, len(rx.findall(t))) for s, rx in _SPONSOR_RE]
-    return [s for s, n in sorted(found, key=lambda f: (-f[1], -len(f[0]))) if n > 0]
+    counts: dict = {}
+    for s, rx in _SPONSOR_RE:
+        n = len(rx.findall(t))
+        if n:
+            name = SPONSOR_ALIASES.get(s, s)
+            counts[name] = max(counts.get(name, 0), n)
+    return [s for s, n in sorted(counts.items(), key=lambda f: (-f[1], f[0]))]
 
 
 def extract_deal_value(text: str) -> dict:
@@ -416,7 +488,7 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
                      current_months: int = 15) -> pd.DataFrame:
     """XBRL financials filed before each deal's first filing (point in time)."""
     cols = ["deal_id", "fin_filed", "period_end", "fin_form", "revenue", "operating_income", "dna", "dna_tag",
-            "amortization", "pretax_income", "interest_expense", "cash_total", "debt", "net_cash", "shares_dei",
+            "amortization", "pretax_income", "interest_expense", "cash_total", "debt", "debt_missing", "net_cash", "shares_dei",
             "shares_filing", "shares_filing_kind", "ebitda", "ebitda_source"]
     if not len(deals) or facts is None or not len(facts):
         return pd.DataFrame(columns=cols)
@@ -443,7 +515,7 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
         rows.append({"deal_id": d.deal_id, "fin_filed": r["fund_available"], "period_end": r["period_end"],
                      "fin_form": r["form"], **{k: r.get(k) for k in ("revenue", "operating_income", "dna", "dna_tag",
                                                                      "amortization", "pretax_income",
-                                                                     "interest_expense", "cash_total", "debt",
+                                                                     "interest_expense", "cash_total", "debt", "debt_missing",
                                                                      "net_cash", "shares_dei", "shares_filing",
                                                                      "shares_filing_kind")}})
     out = pd.DataFrame(rows, columns=cols[:-2])
@@ -458,11 +530,34 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
     return out
 
 
+BUYER_TYPES = ("sponsor", "sponsor not on the list", "strategic or unclear", "SPAC merger", "not read")
+
+
+def classify_buyers(deals: pd.DataFrame, *, spac_trust_mentions: int = 5, pe_cues: int = 2) -> pd.DataFrame:
+    """Who buys: a named sponsor; private equity wording near the buyer without a listed
+    name; a strategic or unclear buyer (kept as the flagged comparison group); a SPAC merger
+    (blank-check SIC 6770 or a document about a trust account – not a take-private, excluded)."""
+    d = deals.copy()
+    for c, default in (("sponsor", ""), ("pe_cues", 0), ("trust_account_mentions", 0), ("sic", np.nan), ("text_chars", 0)):
+        if c not in d.columns:
+            d[c] = default
+    spac = (pd.to_numeric(d["sic"], errors="coerce").eq(6770)
+            | (pd.to_numeric(d["trust_account_mentions"], errors="coerce").fillna(0) >= spac_trust_mentions))
+    named = d["sponsor"].fillna("").astype(str).ne("")
+    cues = pd.to_numeric(d["pe_cues"], errors="coerce").fillna(0) >= pe_cues
+    read = pd.to_numeric(d["text_chars"], errors="coerce").fillna(0) > 0
+    d["buyer_type"] = np.select([spac.to_numpy(dtype=bool), named.to_numpy(dtype=bool), cues.to_numpy(dtype=bool),
+                                 read.to_numpy(dtype=bool)], [BUYER_TYPES[i] for i in (3, 0, 1, 2)], default="not read")
+    d["core_sample"] = d["buyer_type"].isin(BUYER_TYPES[:2])
+    d["comparison_group"] = d["buyer_type"].eq("strategic or unclear")
+    return d
+
+
 def entry_values(deals: pd.DataFrame) -> pd.DataFrame:
     """Enterprise value at the offer price and the entry multiples (inputs, not outcomes)."""
     d = deals.copy()
     for c in ("offer_price", "shares_dei", "shares_filing", "net_cash", "ebitda", "revenue", "debt_commitment_usd",
-              "equity_commitment_usd"):
+              "equity_commitment_usd", "debt_missing"):
         if c not in d.columns:                     # an earlier phase failed: the values stay unknown
             d[c] = np.nan
     # the latest filing's share count (cover page, else weighted-average shares: the SEC data
@@ -470,7 +565,9 @@ def entry_values(deals: pd.DataFrame) -> pd.DataFrame:
     shares = pd.to_numeric(d["shares_filing"], errors="coerce")
     shares = shares.where(shares > 0, pd.to_numeric(d["shares_dei"], errors="coerce"))
     d["equity_value"] = d["offer_price"] * shares
-    d["enterprise_value"] = d["equity_value"] - d["net_cash"]
+    # no debt tag in the filing is not zero debt: the enterprise value stays unknown there
+    no_debt_tag = d["debt_missing"].fillna(False).astype(bool)
+    d["enterprise_value"] = (d["equity_value"] - d["net_cash"]).mask(no_debt_tag)
     d["ev_ebitda"] = (d["enterprise_value"] / d["ebitda"]).where(d["ebitda"] > 0)
     d["ev_revenue"] = (d["enterprise_value"] / d["revenue"]).where(d["revenue"] > 0)
     d["leverage_x"] = (d["debt_commitment_usd"] / d["ebitda"]).where(d["ebitda"] > 0)
@@ -730,13 +827,15 @@ def cross_check(deals: pd.DataFrame, *, price_tol: float = 0.005, value_tol: flo
 def check_sample(deals: pd.DataFrame, n: int = 30, seed: int = 0) -> list:
     """`n` deals to read, drawn by a hash of the seed and the deal id – nobody chooses them,
     and a deal keeps its place when the sample grows. Pool: completed deals whose document
-    was read (every read deal when none is completed)."""
+    was read (every read deal when none is completed), without SPAC mergers."""
     import hashlib
     if deals is None or not len(deals) or "text_chars" not in deals.columns:
         return []
     pool = deals[pd.to_numeric(deals["text_chars"], errors="coerce").fillna(0) > 0]
     if "completed" in pool.columns and pool["completed"].fillna(False).astype(bool).any():
         pool = pool[pool["completed"].fillna(False).astype(bool)]
+    if "buyer_type" in pool.columns:                       # SPAC mergers are not in the sample
+        pool = pool[pool["buyer_type"].astype(str).ne("SPAC merger")]
     ids = sorted(pool["deal_id"].astype(str), key=lambda i: hashlib.sha256(f"{int(seed)}:{i}".encode()).hexdigest())
     return ids[:int(n)]
 
@@ -800,7 +899,8 @@ def check_lines(deals: pd.DataFrame, ids: list) -> list[str]:
     for (n, i), g in sheet.groupby(["n", "deal_id"], sort=True):
         r, h = by.loc[i], g.iloc[0]
         filed = pd.to_datetime(r.get("first_filed"), errors="coerce")
-        lines.append(f"CHECK {n:02d}  {i} · {h['target_name']} · {_txt(r.get('doc_form'))} · first filed "
+        lines.append(f"CHECK {n:02d}  {i} · {h['target_name']} · {_txt(r.get('buyer_type')) or 'buyer n/a'} · "
+                     f"{_txt(r.get('doc_form'))} · first filed "
                      f"{'n/a' if pd.isna(filed) else filed.date()} · {h['source_url'] or 'no document'}")
         second_filed = pd.to_datetime(r.get("second_filed"), errors="coerce") if "second_filed" in by.columns else pd.NaT
         lines.append(f"  second source: {h['second_kind'] or 'none found'}"
@@ -813,6 +913,26 @@ def check_lines(deals: pd.DataFrame, ids: list) -> list[str]:
             if x.second_value != "n/a" or x.second_passage:
                 line += f" || second: {x.second_value}" + (f" | «{x.second_passage}»" if x.second_passage else "")
             lines.append(line + f" [{x.check or 'none'}]")
+    return lines
+
+
+def check_compact(deals: pd.DataFrame, ids: list, label: str = "DEV") -> list[str]:
+    """Earlier reading samples, one line per deal without passages: after a change to the
+    extractors they show what the deals that were read before now give."""
+    if deals is None or not len(deals) or not ids:
+        return []
+    by = deals.assign(deal_id=deals["deal_id"].astype(str)).set_index("deal_id")
+    lines = []
+    for n, i in enumerate(ids, 1):
+        if i not in by.index:
+            lines.append(f"{label} {n:02d}  {i} · not in the sample any more")
+            continue
+        r = by.loc[i]
+        g = lambda c: r.get(c) if c in by.columns else None  # noqa: E731
+        lines.append(f"{label} {n:02d}  {i} · {_txt(g('target_name'))} · {_txt(g('buyer_type')) or 'buyer n/a'} · "
+                     f"price {_num(g('offer_price'))} · equity {_money(g('equity_commitment_usd'))} · "
+                     f"debt {_money(g('debt_commitment_usd'))} · sponsor {_txt(g('sponsor')) or 'n/a'} · "
+                     f"EV {_money(g('enterprise_value'))}")
     return lines
 
 
@@ -884,6 +1004,13 @@ def summary(deals: pd.DataFrame) -> dict:
             out[f"{key}_known"] = float(d[col].notna().mean())
     if "sponsor" in d.columns:
         out["sponsor_named"] = float(d["sponsor"].fillna("").ne("").mean())
+    if "buyer_type" in d.columns:
+        counts = d["buyer_type"].value_counts()
+        out["buyers"] = ", ".join(f"{k} {int(counts.get(k, 0))}" for k in BUYER_TYPES if counts.get(k, 0))
+        out["core_sample"] = int(d["core_sample"].sum())
+        out["comparison_group"] = int(d["comparison_group"].sum())
+    if "debt_missing" in d.columns:
+        out["debt_tag_missing"] = float(d["debt_missing"].fillna(False).astype(bool).mean())
     if "sic" in d.columns:
         sic = pd.to_numeric(d["sic"], errors="coerce")
         out["financial_firms"] = int(sic.between(6000, 6799).sum())
