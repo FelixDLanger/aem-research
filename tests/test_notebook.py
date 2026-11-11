@@ -69,6 +69,7 @@ def test_paper_a_notebook_is_valid_and_compiles():
 NOTEBOOK_D = ROOT / "notebooks" / "03_universe_a_diagnostic.ipynb"
 NOTEBOOK_R = ROOT / "notebooks" / "04_results.ipynb"
 NOTEBOOK_AR = ROOT / "notebooks" / "05_paper_a_results.ipynb"
+NOTEBOOK_X = ROOT / "notebooks" / "06_explore.ipynb"
 
 
 def test_diagnostic_notebook_is_valid_and_reads_only():
@@ -90,7 +91,7 @@ def test_notebooks_match_their_builders(tmp_path):
     import sys
     for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
                         ("build_notebook_diag.py", NOTEBOOK_D), ("build_notebook_results.py", NOTEBOOK_R),
-                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR)):
+                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
@@ -98,7 +99,7 @@ def test_notebooks_match_their_builders(tmp_path):
 
 def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     from aem_research import env
-    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR):
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X):
         stamp = env.notebook_build(nb_path)
         assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
         setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
@@ -117,7 +118,7 @@ def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
     from aem_research import env
     rel = aem_research.RELEASE
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR)):
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X)):
         assert env.notebook_release(nb_path) == rel, nb_path.name
         cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
         title = "".join(cells[0]["source"]).splitlines()[0]
@@ -162,3 +163,15 @@ def test_paper_a_results_notebook_is_valid_and_computes_nothing_before_its_check
     compute = next(i for i, src in enumerate(codes) if "par.confirmatory(" in src)
     assert checks < compute and "if not problems:" in codes[compute] and "paper_a_LOCK.json" in codes[checks]
     assert "SecClient" not in "\n".join(codes) and "requests" not in "\n".join(codes)        # nothing is downloaded
+
+
+def test_exploration_notebook_needs_both_locks_and_downloads_nothing():
+    nb = json.loads(NOTEBOOK_X.read_text(encoding="utf-8"))
+    codes = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    for i, src in enumerate(codes):
+        assert not re.search(r"^\s*[!%]", src, flags=re.M)
+        compile(src, f"cell-{i}", "exec")
+    checks = next(i for i, src in enumerate(codes) if "data_run_problems(cfg_b, RUN_B)" in src)
+    tables = next(i for i, src in enumerate(codes) if "px.run_all(" in src)
+    assert checks < tables and "data_run_problems(cfg_a, RUN_A)" in codes[checks] and "if not problems:" in codes[tables]
+    assert "SecClient" not in "\n".join(codes) and "requests" not in "\n".join(codes)

@@ -1,4 +1,4 @@
-"""End-to-end check for notebook 05 (Paper A's results from the locked run). No network.
+"""End-to-end check for notebooks 05 and 06 (Paper A's results and the exploration). No network.
 
     python tools/e2e_paper_a_results.py <scratch_dir> <repo_dir>
 
@@ -7,7 +7,8 @@ code cell of notebook 05 against that Drive, each time on a copy of the repo:
   ok        the copy's Paper A lock names the synthetic run: sample, tests, tables, block
   mismatch  the lock names another run: stops before any result
   unlocked  no lock: stops before any result
-Exits 0 when every case behaves.
+Then notebook 06 on the same Drive: with both locks naming the synthetic runs (every table), and
+without Paper A's lock (stops). Exits 0 when every case behaves.
 """
 import json
 import os
@@ -37,11 +38,16 @@ print("data run:", IDENTITY)
 assert IDENTITY and IDENTITY["release"] >= 12
 
 
-def repo_copy(name: str, data_run: dict | None) -> Path:
+def repo_copy(name: str, data_run: dict | None, data_run_b: dict | None = None) -> Path:
     copy = SCRATCH / f"repo_{name}"
     shutil.rmtree(copy, ignore_errors=True)
     shutil.copytree(REPO, copy, ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
     (copy / "config" / "paper_a_LOCK.json").unlink(missing_ok=True)
+    if data_run_b is not None:                              # Paper B's lock re-pointed at the synthetic notebook-01 run
+        (copy / "config" / "LOCK.json").unlink()
+        script = ("import json, sys; from aem_research.config import lock_config; "
+                  "lock_config('config/preregistration.yaml', note='e2e', data_run=json.loads(sys.argv[1]))")
+        subprocess.run([sys.executable, "-c", script, json.dumps(data_run_b)], cwd=copy, check=True)
     if data_run is not None:
         script = ("import json, sys; from aem_research.config import lock_config; "
                   "print(lock_config('config/paper_a.yaml', 'config/paper_a_LOCK.json', note='e2e', "
@@ -88,4 +94,35 @@ assert written() == [], "results written although the run is not the data run"
 block = run_notebook(repo_copy("unlocked", None))
 assert "CHECKS    STOPPED – the pre-registration is not locked" in block and written() == [], block
 
-print(f"\nNOTEBOOK 05 OK in all three cases ({time.time() - t0:.0f}s)")
+
+
+def run_explore(repo: Path) -> str:
+    for f in ("explore.txt", "explore.xlsx"):
+        (OUTPUT / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(DRIVE), AEM_REPO_DIR=str(repo))
+    nb = json.loads((repo / "notebooks" / "06_explore.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (OUTPUT / "explore.txt").read_text(encoding="utf-8")
+
+
+RUN_B = json.loads((OUTPUT / "coverage_report.json").read_text(encoding="utf-8"))
+IDENTITY_B = {k: RUN_B[k] for k in ("repo_commit", "release", "notebook_build", "generated_utc")}
+block = run_explore(repo_copy("explore", IDENTITY, IDENTITY_B))
+print(block)
+assert block.startswith("AEM EXPLORE v") and "CHECKS    locks ok · data runs ok" in block and "ERRORS    none" in block
+assert "INPUTS    deals 8 · core 7 · price panel rows " in block and "outcome rows 0" not in block
+for label in ("E1 premium by year", "E1 benchmark by year · year 20", "E2 margins · group core", "E3 wider coverage · enterprise value",
+              "E4 own history", "E5 target signals", "E6 public holder · windows ended in a take-private", "E7 exit slowdown",
+              "E8 sponsor styles", "E9 public vs private · year 20"):
+    assert label in block, label
+wb = pd.read_excel(OUTPUT / "explore.xlsx", sheet_name=None, engine="openpyxl")
+assert {"1 premium by year", "2 margins", "4 own history", "own_history_deals", "9 public vs private"} <= set(wb), set(wb)
+
+block = run_explore(repo_copy("explore_unlocked", None, IDENTITY_B))
+assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and not (OUTPUT / "explore.xlsx").exists(), block
+block = run_explore(repo_copy("explore_other_b", IDENTITY))        # Paper B's lock names the real run, not this Drive's
+assert "CHECKS    STOPPED – Paper B: " in block and not (OUTPUT / "explore.xlsx").exists(), block
+
+print(f"\nNOTEBOOKS 05 AND 06 OK in all cases ({time.time() - t0:.0f}s)")

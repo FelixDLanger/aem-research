@@ -66,3 +66,21 @@ def test_results_block_and_failed_gates():
     assert "BY YEAR   3y touch 3x: 2014 7.0%" in lines
     stopped = results_block({**r, "problems": ["the lock names no data run"], "h1": {}, "outcomes": {}}).splitlines()
     assert "CHECKS    STOPPED – the lock names no data run" in stopped and not any(x.startswith("H1") for x in stopped)
+
+
+def test_explore_block_prints_every_row_with_shares_as_percent_and_stops_on_problems():
+    from aem_research.report import explore_block
+    r = {"release": 13, "generated_utc": "2026-11-11 12:00 UTC", "repo_commit": "abc1234", "notebook_build": "0" * 12,
+         "lock_status_a": "locked", "lock_status_b": "locked", "inputs": {"deals": 685, "core": 471},
+         "tables": {"2 margins": [{"group": "core", "n": 120, "target_margin": 0.118, "median_ratio": 0.61, "p": 0.0004}],
+                    "7 exit slowdown": [], "_own_history_deals": [{"deal_id": "x"}],
+                    "4 own history": [{"group": "all", "n": 300, "median_premium_to_last": 0.31, "p25": -0.02, "p75": float("nan")}]},
+         "run": {}}
+    lines = explore_block(r).splitlines()
+    assert lines[0].startswith("AEM EXPLORE v13") and "Paper A locked · Paper B locked" in lines[2]
+    assert "CHECKS    locks ok · data runs ok" in lines and "INPUTS    deals 685 · core 471" in lines
+    assert "E2 margins · group core · n 120 · target margin 11.8% · median ratio 0.61 · p <0.001" in lines
+    assert "E4 own history · group all · n 300 · median premium to last +31.0% · p25 -2.0% · p75 n/a" in lines
+    assert "E7 exit slowdown · no rows" in lines and not any("deal id" in x for x in lines)
+    stopped = explore_block({**r, "problems": ["Paper A: the pre-registration is not locked (status unlocked)"], "tables": None})
+    assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in stopped and "E2 margins" not in stopped

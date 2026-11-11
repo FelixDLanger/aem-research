@@ -370,3 +370,54 @@ def paper_a_results_block(report: dict) -> str:
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Exploration across both papers (notebook 06)
+# ---------------------------------------------------------------------------
+
+_SHARE_COLUMNS = {"median_premium_pct", "ci_low_pct", "ci_high_pct", "before_2022_pct", "from_2022_pct", "target_margin",
+                  "benchmark_implied_margin", "share_below_benchmark", "targets_share", "universe_share", "difference",
+                  "exit_rate", "median_premium_to_last", "p25", "p75", "share_offer_below_own_high", "public_mean_annual",
+                  "fund_median_net_irr", "vs_sector_deals_pct", "touch_3x", "share_below_1x", "share_2x_or_more",
+                  "sponsor_name_accuracy_in_reading"}
+_SIGNED = {"median_premium_pct", "ci_low_pct", "ci_high_pct", "before_2022_pct", "from_2022_pct", "difference",
+           "median_premium_to_last", "p25", "p75", "vs_sector_deals_pct", "public_mean_annual"}
+
+
+def _cell(col: str, v) -> str:
+    if col in ("p", "p_regime"):
+        return _p(v)
+    if col in _SHARE_COLUMNS:
+        return _share(v, col in _SIGNED)
+    if isinstance(v, str):
+        return v
+    if not _fin(v):
+        return "n/a"
+    f = float(v)
+    return f"{int(f)}" if f == int(f) and abs(f) < 1e7 else f"{f:.2f}"
+
+
+def explore_block(report: dict) -> str:
+    """Notebook 06's paste block: one line per row of every exploratory table."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lines = [f"AEM EXPLORE {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · Paper A {r.get('lock_status_a', '')} · Paper B {r.get('lock_status_b', '')}"]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("locks ok · data runs ok" if not problems else "STOPPED – " + " | ".join(problems)))
+    if r.get("inputs"):
+        lines.append("INPUTS    " + _items(r["inputs"]))
+    if r.get("tables"):
+        lines.append("EXPLORE   everything below is exploratory: reported in full, not a finding until confirmed on other data")
+    for name, rows in (r.get("tables") or {}).items():
+        if name.startswith("_"):
+            continue
+        if not rows:
+            lines.append(f"E{name} · no rows")
+        for row in rows:
+            lines.append(f"E{name} · " + " · ".join(f"{k.replace('_', ' ')} {_cell(k, v)}" for k, v in row.items()))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
