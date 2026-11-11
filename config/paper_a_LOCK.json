@@ -1,0 +1,24 @@
+{
+  "schema": "aem-prereg-lock/1",
+  "current": {
+    "config_sha256": "a60d9b878073a92a86f33e28870ecb7e6b7c456a4a2041233fc0711f4aac7a0c",
+    "config_file": "paper_a.yaml",
+    "locked_at_utc": "2026-11-11T06:15:41Z",
+    "hypotheses": [
+      "A-H1",
+      "A-H2",
+      "A-H3",
+      "A-X1",
+      "A-X2",
+      "A-X3"
+    ],
+    "note": "Locked by Claude on Felix's instruction of Nov 11, 2026 (agree to the new A-H1 to A-H3, keep the drafted three as exploratory additions, lock on this run). Data run: notebook 02 v11 of 2026-11-11 05:33 UTC. Before this lock no premium over the benchmark, no exit timing and no fund return was computed or shown.",
+    "data_run": {
+      "repo_commit": "eca6f4a",
+      "release": 11,
+      "notebook_build": "df1e6ca31b56",
+      "generated_utc": "2026-11-11 05:33 UTC"
+    }
+  },
+  "history": []
+}

@@ -2,6 +2,8 @@
 block that ends every run."""
 from __future__ import annotations
 
+import math
+
 
 def _pct(v) -> str:
     try:
@@ -236,4 +238,135 @@ def render_markdown(report: dict) -> str:
                        ("regime_summary", "Regime moderators (range across start dates)")):
         if report.get(key):
             lines += [f"## {title}", *_flat(report[key]), ""]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Paper A results (notebook 05)
+# ---------------------------------------------------------------------------
+
+def _fin(v) -> bool:
+    try:
+        return v is not None and math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
+
+
+def _share(v, signed: bool = False) -> str:
+    if not _fin(v):
+        return "n/a"
+    return f"{v:+.1%}" if signed else f"{v:.1%}"
+
+
+def _p(v) -> str:
+    if not _fin(v):
+        return "n/a"
+    return "<0.001" if v < 0.001 else f"{v:.3f}"
+
+
+def _f(v, digits: int = 2) -> str:
+    return "n/a" if not _fin(v) else f"{v:.{digits}f}"
+
+
+def _premium_line(t: dict) -> str:
+    return (f"n {t['n']} · median premium {_share(t['median_premium_pct'], True)} (95% {_share(t['ci_low_pct'], True)} to "
+            f"{_share(t['ci_high_pct'], True)}) · above benchmark {_share(t['share_above_benchmark'])} · p {_p(t['h1_p'])}")
+
+
+def _regime_line(t: dict) -> str:
+    return (f"before 2022 {_share(t['median_before_pct'], True)} (n {t['n_before_2022']}) · 2022 on "
+            f"{_share(t['median_2022_on_pct'], True)} (n {t['n_2022_on']}) · difference in logs {_f(t['diff_log'])} "
+            f"(95% {_f(t['diff_ci_low'])} to {_f(t['diff_ci_high'])}) · p {_p(t['h2_p'])}")
+
+
+def _exit_line(t: dict) -> str:
+    return (f"visible exit by {t['horizon_years']:g}y · completed {t['early_cohort']} {_share(t['early_rate'])} "
+            f"({t['early_exits']} of {t['early_n']}) · completed {t['late_cohort']} {_share(t['late_rate'])} "
+            f"({t['late_exits']} of {t['late_n']}) · p {_p(t['h3_p'])}")
+
+
+def _rows(records, fmt, per_line: int = 6) -> list[str]:
+    items = [fmt(r) for r in records]
+    return [" · ".join(items[i:i + per_line]) for i in range(0, len(items), per_line)]
+
+
+def paper_a_results_block(report: dict) -> str:
+    """Notebook 05's paste block: the checks, the sample, the three confirmatory tests with
+    their robustness versions, then every exploratory table (prefixed X)."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lock, dr = r.get("lock") or {}, (r.get("lock") or {}).get("data_run") or {}
+    status, when = r.get("lock_status", ""), lock.get("locked_at_utc")
+    state = f"locked {when}" if status == "locked" and when else f"{status}, locked {when}" if when else status
+    lines = [f"PAPER A RESULTS {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · config A {str(r.get('config_sha256', ''))[:12]} ({state})"
+             + (f" · data run v{dr.get('release')} {dr.get('repo_commit')} {dr.get('generated_utc')}" if dr else "")]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("lock ok · data run ok" if not problems else "STOPPED – " + " | ".join(problems)))
+    if r.get("funnel"):
+        lines.append("SAMPLE    " + _items(r["funnel"]))
+    c = r.get("confirmatory")
+    if c:
+        holm, verdict = c["holm"], c["verdict"]
+        lines.append(f"A-H1      core · {_premium_line(c['premium'])} · Holm {_p(holm['A-H1'])} · {verdict['A-H1']}")
+        lines.append(f"A-H2      core · {_regime_line(c['premium'])} · Holm {_p(holm['A-H2'])} · {verdict['A-H2']}")
+        lines.append(f"A-H3      core · {_exit_line(c['exits'])} · Holm {_p(holm['A-H3'])} · {verdict['A-H3']}")
+        for name, t in c["robustness"].items():
+            if "h1_p" in t:
+                lines.append(f"ROBUST    {name} · {_premium_line(t)}")
+                lines.append(f"ROBUST    {name} · {_regime_line(t)}")
+            else:
+                lines.append(f"ROBUST    {name} · {_exit_line(t)}")
+    x = r.get("exploratory") or {}
+    if x:
+        lines.append("EXPLORE   everything below is exploratory: reported in full, not a finding until confirmed on other data")
+    by: dict = {}
+    for row in x.get("premium by group", []):
+        by.setdefault(row["by"], []).append(row)
+    for key, rows in by.items():
+        for line in _rows(rows, lambda q: f"{q['group']} {_share(q['median_premium_pct'], True)} "
+                                         f"({_share(q['share_above_benchmark'])} above, n {q['n']})", 5):
+            lines.append(f"X PREMIUM by {key} · {line}")
+    if x.get("premium regression"):
+        lines.append("X REGRESS log premium on · " + " · ".join(
+            f"{q['term']} {q['coef']:+.3f} (se {_f(q['se'], 3)}, p {_p(q['p'])})" for q in x["premium regression"])
+            + f" · n {int(x['premium regression'][0]['n'])}")
+    by = {}
+    for row in x.get("exit probability", []):
+        by.setdefault(row["by"], []).append(row)
+    for key, rows in by.items():
+        for line in _rows(rows, lambda q: f"{q['group']} 3y {_share(q.get('exit_by_3y'))} 5y {_share(q.get('exit_by_5y'))} "
+                                         f"7y {_share(q.get('exit_by_7y'))} (n {q['n']}, exits {q['exits_seen']}, "
+                                         f"reIPO share {_share(q['reipo_share_of_exits'])})", 3):
+            lines.append(f"X EXITS   by {key} · {line}")
+    for line in _rows(x.get("holding by exit year", []),
+                      lambda q: f"{int(q['exit_year'])}: {int(q['exits'])} exits, {_f(q['median_years_held'], 1)}y held, "
+                                f"{int(q['reipo'])} reIPO", 5):
+        lines.append(f"X HOLDING exits seen by exit year · {line}")
+    for line in _rows(x.get("leverage (unvalidated)", []),
+                      lambda q: f"{q['group']} {q['measure']} {_f(q['median'])} (IQR {_f(q['p25'])} to {_f(q['p75'])}, "
+                                f"n {q['n']}, term accuracy {_share(q['term_accuracy_in_reading'])})", 3):
+        lines.append(f"X LEVERAGE unvalidated terms · {line}")
+    for line in _rows((x.get("sponsors (unvalidated)") or [])[:15],
+                      lambda q: f"{q['sponsor']} {int(q['deals'])} deals ({_share(q['median_premium_pct'], True)}, "
+                                f"{int(q['visible_exits'])} exits)", 5):
+        lines.append(f"X SPONSORS name accuracy {_share((x['sponsors (unvalidated)'][0]).get('sponsor_name_accuracy_in_reading'))} · {line}")
+    for q in x.get("measurement", []):
+        lines.append(f"X MEASURE {q['measure']} · n {q['n']} · median {_f(q['median'])} · p10 {_f(q['p10'])} · p90 "
+                     f"{_f(q['p90'])} · within 15% {_share(q['within_15pct'])}")
+    for line in _rows(x.get("WSIB by vintage", []),
+                      lambda q: f"{int(q['vintage_year'])}: {int(q['funds'])} funds TVPI {_f(q['pooled_tvpi'])} DPI "
+                                f"{_f(q['pooled_dpi'])} IRR {_share(q['median_net_irr'])}", 5):
+        lines.append(f"X WSIB    buyout funds by vintage · {line}")
+    for line in _rows(x.get("WSIB distribution pace", []),
+                      lambda q: f"{str(q['report_date'])[:10]}: DPI {_f(q['dpi'])}"
+                                + (f", distributed since last {q['distributed_since_last_report'] / 1e9:.2f}bn"
+                                   if _fin(q.get("distributed_since_last_report")) else ""), 5):
+        lines.append(f"X WSIB    distribution pace · {line}")
+    for q in x.get("premium vs fund returns", []):
+        lines.append(f"X WSIB    entry-year premium against the vintage's fund multiple · years {q['years']} · Spearman "
+                     f"{_f(q['spearman'])}")
+    lines += _run_lines(r)
+    lines.append("=" * 72)
     return "\n".join(lines)

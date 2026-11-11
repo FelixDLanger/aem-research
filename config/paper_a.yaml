@@ -1,12 +1,12 @@
-# Paper A – regime-conditional value creation in US take-private buyouts (draft).
+# Paper A – entry pricing and exit visibility in US take-private buyouts (final, locked – see config/paper_a_LOCK.json).
 # Hashed like the Paper B config; config/paper_a_LOCK.json locks it. Notebook 02 reads it.
-# Until the lock, the notebook reports counts and entry-side data only (A2).
+# Until the lock, notebook 02 reported counts and entry-side data only (A2); notebook 05 computes the results.
 
 study:
-  name: Regime-conditional value creation in US take-private buyouts
+  name: What sponsors pay and what the public record shows of the exit – US take-privates 2012–2026
   short_name: Paper A
-  version: "0.1"
-  status: draft
+  version: "1.0"
+  status: final
   author: Felix D. Langer (ORCID 0009-0000-3205-8088)
   shares_with: >-
     config/preregistration.yaml (Paper B) – the regime moderators (D7), the EDGAR caches
@@ -48,35 +48,116 @@ decisions:
       deals with a strategic or unclear buyer stay in as a flagged comparison group;
       SPAC mergers are not take-privates and are excluded.
 
-review_before_lock:
-  - >-
-    Run notebook 02 once (counts only) and check, by announcement year, how many deals
-    have entry financials, an offer price and a visible exit; then fix the sample rules
-    below.
-  - >-
-    Check the extracted terms as the validation section says: 30 deals drawn by a fixed
-    seed, read against the passages they came from, and a second filing for every deal.
-    Each term has its own gate (validation.term_gates): 90% correct or it is not used.
-    The offer price and the buyer type, which the hypotheses need, have passed.
-  - >-
-    Agree the hypotheses below with Felix (drafted by Claude on Nov 6, 2026), then set
-    study.status to final.
+  - id: A5
+    topic: hypotheses
+    status: decided by Felix on Nov 11, 2026
+    decision: >-
+      The paper tests entry pricing and exit visibility (A-H1 to A-H3 below), which the
+      public record can carry. The hypotheses drafted on Nov 6 (value creation between
+      entry and exit) stay as exploratory additions (A-X1 to A-X3): only 147 of 742
+      completed deals have a visible exit and 35 have post-buyout financials, so they
+      cannot be tested with power. The exploratory part goes as far as the data allows
+      and is reported in full (A3).
+  - id: A6
+    topic: terms that missed the 90% gate
+    status: decided by Felix on Nov 11, 2026
+    decision: >-
+      Equity commitment, debt commitment and sponsor name missed 90% in three reading
+      samples. They are used in exploratory tables only, each with its measured accuracy
+      next to it, and in no confirmatory test. The paper states why 90% was out of reach
+      (proxies put many amounts near the commitment letters that are not commitments).
+  - id: A7
+    topic: lock and data run
+    status: decided by Felix on Nov 11, 2026 (lock on this run, then print the results)
+    decision: >-
+      The lock names the notebook-02 run whose saved tables the results come from
+      (config/paper_a_LOCK.json: commit, version, notebook build, start time). Notebook 05
+      refuses any other run. Before the lock no premium over the benchmark, no exit timing
+      and no fund return was computed or shown.
+
+review_before_lock: []
 
 hypotheses:
   - id: A-H1
-    tier: draft
+    tier: confirmatory
     statement: >-
-      For take-privates entered before 2022, multiple expansion accounts for a larger
-      share of equity value creation than for deals entered in 2022 or later.
+      Sponsors pay more than the public market's going rate: in the core sample the
+      median entry EV/EBITDA lies above the public small-cap benchmark's median on the
+      same date (median log premium above zero).
   - id: A-H2
-    tier: draft
+    tier: confirmatory
     statement: >-
-      Deal-level multiple change tracks the public small-cap benchmark's multiple change
-      between entry and exit; the remainder is the deal-specific part.
+      That premium is smaller for deals entered in 2022 or later than for deals entered
+      before 2022.
   - id: A-H3
-    tier: draft
+    tier: confirmatory
     statement: >-
-      Holding periods lengthen and re-IPO exits become rarer for exits after 2021.
+      Public exits became rarer: the probability of a visible exit (re-IPO or sale to a
+      listed buyer) within five years of completion is lower for deals completed
+      2017–2021 than for deals completed 2012–2016.
+  - id: A-X1
+    tier: exploratory
+    statement: >-
+      (Drafted Nov 6 as A-H1.) For take-privates entered before 2022, multiple expansion
+      accounts for a larger share of equity value creation than for later deals.
+  - id: A-X2
+    tier: exploratory
+    statement: >-
+      (Drafted Nov 6 as A-H2.) Deal-level multiple change tracks the public small-cap
+      benchmark's multiple change between entry and exit.
+  - id: A-X3
+    tier: exploratory
+    statement: >-
+      (Drafted Nov 6 as A-H3.) Holding periods lengthen and re-IPO exits become rarer for
+      exits after 2021.
+
+estimation:
+  alpha: 0.05
+  multiple_testing: Holm over the three confirmatory tests
+  seed: 20261111
+  bootstrap_draws: 10000
+  regime_split: "2022-01-01"          # entry date = the first target-side merger filing
+  premium: >-
+    log(deal EV/EBITDA ÷ benchmark median EV/EBITDA); the benchmark is the Paper B
+    universe's median at the latest quarterly start date on or before the entry date.
+    The benchmark starts with Paper B's universe (2016), so earlier entries have no
+    premium and are not part of A-H1 and A-H2; A-H3 uses every completed deal.
+  h1: >-
+    Core sample with a valid premium. Estimate: the median log premium with a 95%
+    percentile-bootstrap interval. Test: Wilcoxon signed-rank, two-sided. Supported if
+    Holm-adjusted p < alpha and the median is above zero.
+  h2: >-
+    Same deals. Estimate: median log premium of entries in 2022 or later minus that of
+    earlier entries, with a bootstrap interval (groups resampled separately). Test:
+    Mann–Whitney, two-sided. Supported if Holm-adjusted p < alpha and the difference is
+    below zero.
+  h3:
+    early_cohort: [2012, 2016]        # completion year
+    late_cohort: [2017, 2021]
+    horizon_years: 5
+    event: the first re-IPO or sale to a listed buyer after completion (exits section)
+    censoring: the data run's date; follow-up is cut at the horizon for both cohorts
+    test: >-
+      Core sample. Estimate: Kaplan–Meier probability of a visible exit by five years in
+      each cohort. Test: log-rank, two-sided. Supported if Holm-adjusted p < alpha and
+      the later cohort's probability is lower.
+  robustness:
+    - EV/revenue in place of EV/EBITDA (more deals have it)
+    - all buyers in place of the core sample
+    - without deals whose price or stated value disagrees between the two sources
+  exploratory:
+    rule: every table is reported; none is a finding before it is confirmed on other data (A3)
+    notebook_05:
+      - premium by buyer group, entry year, size, sector and regime; regression on Paper B's regime moderators
+      - exit probability by 3, 5 and 7 years by cohort, buyer group and entry premium; re-IPO share
+      - A-X3 – years held and exit route by exit year, for the exits that are visible
+      - leverage and equity share from the unvalidated commitments, sponsor league table, each with its measured accuracy
+      - stated against computed deal values
+      - WSIB buyout funds – net multiple, DPI and IRR by vintage; pace of distributions; entry premium against the same vintage's fund multiple
+    later:
+      - A-X1 and A-X2 – exit values from the buyers' announcements and post-buyout financials
+      - each target against its own history (its trading multiple before the offer) in place of the peer benchmark
+      - the offer against the last price before the announcement
 
 sample:
   announce_years: [2012, 2026]
@@ -88,6 +169,18 @@ sample:
   completion_window_months: 18
   current_filer_months: 15
   value_bridge_excludes_sic: [6000, 6799]     # banks, insurers, REITs: EBITDA is not meaningful
+  analysis:                                   # applied by notebook 05 to the data run's deals
+    population: completed deals (a Form 25 or 15 after the merger filing), announced 2012–2026
+    excluded: SPAC mergers; stock or mixed mergers (the document speaks of an exchange ratio this often)
+    stock_merger_exchange_ratio_mentions: 5
+    core: buyer type "sponsor" or "sponsor not on the list" (in the readings about 95% of them were sponsor deals)
+    no_sponsor_identified: >-
+      every other buyer – the flagged comparison group (A4); it holds strategic buyers
+      and sponsors the list and the wording did not catch
+    multiples_exclude_sic: [6000, 6799]
+    ev_ebitda_max: 50                         # above this EBITDA is close to zero and the multiple says nothing
+    ev_revenue_max: 30
+    benchmark_max_days_before: 100            # a quarterly benchmark date must lie this close before the entry
   buyer_types:                                # decision A4
     sponsor: a listed sponsor named with an affiliation cue (affiliate of, formed by, managed by, led by …)
     sponsor_not_on_the_list: private equity wording within 200 characters after the buyer's name, at least twice
@@ -116,13 +209,19 @@ validation:
       fresh reading sample. A term that misses is reported as not validated and used
       nowhere; it does not hold up the lock. Commitments are taken only from a sentence
       that states them (precision first) and are otherwise unknown.
-    needed_for_the_hypotheses: [offer price, buyer type]
-    descriptive_only: [sponsor name, equity commitment, debt commitment]
-    offer_price: passed (28 of 29 and 30 of 30)
-    buyer_type: passed (30 of 30 on Nov 11)
-    sponsor_name: open (16 of 18 on Nov 11)
-    equity_commitment: open
-    debt_commitment: open
+    needed_for_the_hypotheses: [offer price, the core label]
+    exploratory_only: [sponsor name, equity commitment, debt commitment]   # decision A6
+    results:                                  # Claude's readings of Nov 10 and 11, three seeded samples of 30
+      offer_price: passed – 28 of 29, 30 of 30, 25 of 26
+      core_label: passed – 18 of 19 deals labelled core were sponsor deals (third sample)
+      buyer_type_overall: about 25 of 30 – sponsors not on the list fall into "no sponsor identified"
+      sponsor_name: missed – 14 of 23, 16 of 18, 11 of 14
+      equity_commitment: missed – 16 of 21, 12 of 17, 16 of 19
+      debt_commitment: missed – 10 of 24, 13 of 18, 10 of 13
+    measured_accuracy:                        # the latest reading; printed next to every exploratory use
+      sponsor_name: 0.79
+      equity_commitment: 0.84
+      debt_commitment: 0.77
   second_source:
     what: >-
       the target's own 8-K within the window around the first merger filing that names
@@ -143,7 +242,7 @@ entry:
     intangibles added when only depreciation is tagged; pre-tax income plus interest
     as the fallback
   enterprise_value: offer price × cover-page shares + debt − cash; unknown where the filing tags no debt at all
-  leverage: largest debt amount committed / entry EBITDA (approximate, hand-checked)
+  leverage: largest stated debt commitment / entry EBITDA (exploratory only – decision A6)
 
 exits:
   routes:
@@ -153,14 +252,14 @@ exits:
     - not visible
   still_files_days: 90
   exit_days: 180
-  values: computed only after the lock (A2)
+  values: exit timing in notebook 05 after the lock; exit values are a later exploratory step (A-X1, A-X2)
 
 benchmark:
   public: median EV/EBITDA and EV/revenue of the Paper B universe (US$100m–2bn) at each quarterly start date
 
 regime:
   moderators: Paper B D7 (real yield, 2-year tightening, Baa spread, CPI inflation), measured at entry and at exit
-  primary_split: entry before 2022 vs 2022 or later
+  primary_split: entry before 2022 vs 2022 or later (estimation.regime_split)
 
 wsib:
   first_year: 2016
