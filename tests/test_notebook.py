@@ -70,6 +70,7 @@ NOTEBOOK_D = ROOT / "notebooks" / "03_universe_a_diagnostic.ipynb"
 NOTEBOOK_R = ROOT / "notebooks" / "04_results.ipynb"
 NOTEBOOK_AR = ROOT / "notebooks" / "05_paper_a_results.ipynb"
 NOTEBOOK_X = ROOT / "notebooks" / "06_explore.ipynb"
+NOTEBOOK_E = ROOT / "notebooks" / "07_estimates.ipynb"
 
 
 def test_diagnostic_notebook_is_valid_and_reads_only():
@@ -91,7 +92,7 @@ def test_notebooks_match_their_builders(tmp_path):
     import sys
     for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
                         ("build_notebook_diag.py", NOTEBOOK_D), ("build_notebook_results.py", NOTEBOOK_R),
-                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X)):
+                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X), ("build_notebook_estimates.py", NOTEBOOK_E)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
@@ -99,7 +100,7 @@ def test_notebooks_match_their_builders(tmp_path):
 
 def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     from aem_research import env
-    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X):
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X, NOTEBOOK_E):
         stamp = env.notebook_build(nb_path)
         assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
         setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
@@ -118,7 +119,7 @@ def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
     from aem_research import env
     rel = aem_research.RELEASE
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X)):
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X), ("07", NOTEBOOK_E)):
         assert env.notebook_release(nb_path) == rel, nb_path.name
         cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
         title = "".join(cells[0]["source"]).splitlines()[0]
@@ -175,3 +176,17 @@ def test_exploration_notebook_needs_both_locks_and_downloads_nothing():
     tables = next(i for i, src in enumerate(codes) if "px.run_all(" in src)
     assert checks < tables and "data_run_problems(cfg_a, RUN_A)" in codes[checks] and "if not problems:" in codes[tables]
     assert "SecClient" not in "\n".join(codes) and "requests" not in "\n".join(codes)
+
+
+def test_estimates_notebook_runs_only_after_the_lock_and_its_gates_and_reads_no_prices():
+    nb = json.loads(NOTEBOOK_E.read_text(encoding="utf-8"))
+    codes = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    for i, src in enumerate(codes):
+        assert not re.search(r"^\s*[!%]", src, flags=re.M)
+        compile(src, f"cell-{i}", "exec")
+    checks = next(i for i, src in enumerate(codes) if "data_run_problems(cfg, RUN)" in src)
+    run = next(i for i, src in enumerate(codes) if "est.run_all(" in src)
+    assert checks < run and "failed_gates(RUN)" in codes[checks] and "if not problems:" in codes[run]
+    assert 'cfg.get("estimation.bootstrap")' in codes[run]                     # the pre-registered resamples and seed
+    joined = "\n".join(codes)
+    assert "SecClient" not in joined and "sec_panel" not in joined and "compute_outcomes" not in joined

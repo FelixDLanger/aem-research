@@ -84,3 +84,20 @@ def test_explore_block_prints_every_row_with_shares_as_percent_and_stops_on_prob
     assert "E7 exit slowdown · no rows" in lines and not any("deal id" in x for x in lines)
     stopped = explore_block({**r, "problems": ["Paper A: the pre-registration is not locked (status unlocked)"], "tables": None})
     assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in stopped and "E2 margins" not in stopped
+
+
+def test_estimates_block_prints_verdicts_and_keeps_years_as_years():
+    from aem_research.report import estimates_block
+    lr = {"with_signal": 1917, "windows": 52000, "firms": 3800, "hit_rate_with_signal": 0.131, "base_rate": 0.088, "lr": 1.56,
+          "ci_low": 1.21, "ci_high": 1.95, "p_one_sided": 0.0005}
+    r = {"release": 14, "lock_status": "locked", "lock": {"locked_at_utc": "2026-11-10T13:40:44Z"},
+         "h2": {"windows": 52000, "firms": 3800, "base_rate": 0.088, "main": {"H2a": {**lr, "holm_p": 0.001, "verdict": "supported"},
+                "H2b": {**lr, "with_signal": 394, "holm_p": 0.2, "verdict": "not supported"}}, "placebo": lr, "h2c": [],
+                "h2c_test": {}, "ablation": [{"cohort": "without the fall", **lr}]},
+         "touch_years": [{"event": "first 3x touch", "year": 2021, "touches": 1500, "share": 0.31}], "not_computed": ["no minimum price"],
+         "run": {}}
+    b = estimates_block(r)
+    assert "H2a       1,917 windows of 52,000 (3,800 firms) · hit rate 13.1% against 8.8% · LR 1.56 (95% 1.21 to 1.95) · p <0.001 · Holm 0.001 · supported" in b
+    assert "ABLATION  without the fall · " in b and "TOUCHED   event first 3x touch · year 2021 · touches 1,500 · share 31.0%" in b
+    assert "PENDING   robustness versions that need a rebuilt panel, not computed here: no minimum price" in b
+    assert "CHECKS    STOPPED – x" in estimates_block({"release": 14, "problems": ["x"], "run": {}})

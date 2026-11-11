@@ -1,4 +1,4 @@
-"""End-to-end check for notebook 04 (results from the locked run). No network.
+"""End-to-end check for notebooks 04 and 07 (H1, then H2 to H6, from the locked run). No network.
 
     python tools/e2e_results.py <scratch_dir> <repo_dir>
 
@@ -8,7 +8,8 @@ code cell of notebook 04 against that Drive in four cases, each on a copy of the
   mismatch  the lock names another run (a later start time): stops before any outcome
   unlocked  the copy is not locked: stops before any outcome
   gatefail  locked on the run, but the run's report shows a failed pre-lock gate: stops
-Exits 0 when every case behaves.
+After the ok case notebook 07 runs on the outcomes notebook 04 just wrote (every hypothesis
+printed), and once more on an unlocked copy (stops). Exits 0 when every case behaves.
 """
 import json
 import os
@@ -84,6 +85,35 @@ assert "REGIME    before 2022 · 3y: " in block and "BY YEAR   3y touch 3x: " in
 assert "OUTCOMES  start_windows " in block and "ERRORS    none" in block
 assert "aem_results_h1.xlsx" in outcome_files(DRIVE) and any(f.startswith("outcomes") for f in outcome_files(DRIVE))
 
+
+
+def run_estimates(repo: Path, drive: Path) -> str:
+    for f in ("results_h2_h6.txt", "aem_results_h2_h6.xlsx"):
+        (drive / "aem-research" / "output" / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(drive), AEM_REPO_DIR=str(repo))
+    nb = json.loads((repo / "notebooks" / "07_estimates.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (drive / "aem-research" / "output" / "results_h2_h6.txt").read_text(encoding="utf-8")
+
+
+# notebook 07 on the outcomes just computed
+est_block = run_estimates(SCRATCH / "repo_ok", DRIVE)
+print(est_block)
+assert est_block.startswith("AEM RESULTS H2–H6 v") and "CHECKS    lock ok · data run ok · gates all passed" in est_block
+for label in ("WINDOWS   universe windows ", "H2        3x within 3 years", "H2a       ", "H2b       ", "PLACEBO   ", "ABLATION  full cohort (H2a)",
+              "H3        ", "H4        10x within 5 years", "H4        S1 (FCF per share outgrew revenue)", "M2        10x logit",
+              "M1        ordered logit", "TOUCHED   ", "ROBUST    version primary", "PENDING   robustness versions", "ERRORS    none"):
+    assert label in est_block, label
+import pandas as pd  # noqa: E402
+wb7 = pd.read_excel(OUTPUT / "aem_results_h2_h6.xlsx", sheet_name=None, engine="openpyxl")
+assert {"H2", "H2 ablation", "H3", "H4", "Robustness"} <= set(wb7), set(wb7)
+assert len(wb7["H4"]) == 8 and len(wb7["H2"]) == 3
+stopped = run_estimates(repo_copy("est_unlocked", None), DRIVE)
+assert "CHECKS    STOPPED – the pre-registration is not locked" in stopped and "H2a" not in stopped
+assert not (OUTPUT / "aem_results_h2_h6.xlsx").exists()
+
 # mismatch: another run of the same version
 block = run_notebook(repo_copy("mismatch", {**IDENTITY, "generated_utc": "2099-01-01 00:00 UTC"}), DRIVE)
 assert "CHECKS    STOPPED – generated_utc: the run on Drive has" in block and "H1 TOUCH" not in block, block
@@ -104,4 +134,4 @@ block = run_notebook(repo_copy("gatefail", IDENTITY), drive_g)
 assert "CHECKS    STOPPED – gate failed in the data run: split_recall 75.3% BELOW 90%" in block, block
 assert outcome_files(drive_g) == []
 
-print(f"\nNOTEBOOK 04 OK in all four cases ({time.time() - t0:.0f}s)")
+print(f"\nNOTEBOOKS 04 AND 07 OK in all cases ({time.time() - t0:.0f}s)")

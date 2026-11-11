@@ -421,3 +421,121 @@ def explore_block(report: dict) -> str:
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Paper B's H2 to H6 (notebook 07)
+# ---------------------------------------------------------------------------
+
+_RATE_KEYS = {"base_rate", "hit_rate_with_signal", "hit_rate", "left_out_share", "test_base_rate", "test_hit_rate_with_signal",
+              "p_3x_3y", "p_624x_5y", "share", "difference"}
+_P_KEYS = {"p", "p_one_sided", "p_two_sided", "holm_p"}
+
+
+def _kv(row: dict, skip=()) -> str:
+    out = []
+    for k, v in row.items():
+        if k in skip or (isinstance(v, float) and not _fin(v) and k in ("ci_low", "ci_high", "p_two_sided")):
+            continue
+        if k in _P_KEYS:
+            cell = _p(v)
+        elif k in _RATE_KEYS:
+            cell = _share(v, k == "difference")
+        elif isinstance(v, str):
+            cell = v
+        elif not _fin(v):
+            cell = "n/a"
+        elif k in ("year", "start_year"):
+            cell = f"{int(float(v))}"
+        else:
+            f = float(v)
+            cell = f"{int(f):,}" if f == int(f) and abs(f) >= 100 else f"{int(f)}" if f == int(f) else f"{f:.4f}" if abs(f) < 0.1 else f"{f:.2f}"
+        out.append(f"{k.replace('_', ' ')} {cell}")
+    return " · ".join(out)
+
+
+def _lr_line(r: dict) -> str:
+    return (f"{r.get('with_signal', 0):,} windows of {r.get('windows', 0):,} ({r.get('firms', 0):,} firms) · hit rate "
+            f"{_share(r.get('hit_rate_with_signal'))} against {_share(r.get('base_rate'))} · LR {_f(r.get('lr'))} "
+            f"(95% {_f(r.get('ci_low'))} to {_f(r.get('ci_high'))}) · p {_p(r.get('p_one_sided'))}")
+
+
+def _coef_line(label: str, row: dict) -> str:
+    if row.get("note") or not _fin(row.get("coef")):
+        return f"{label}{row['regressor']} · not estimated: {row.get('note') or 'unknown'}"
+    return (f"{label}{row['regressor']} · odds ratio {_f(row['odds_ratio'])} · coef {row['coef']:+.3f} "
+            f"(se {_f(row['se'], 3)}) · p {_p(row['p'])}")
+
+
+def estimates_block(report: dict) -> str:
+    """Notebook 07's paste block: H2 to H4 with their verdicts, the models, then the
+    exploratory hypotheses, descriptives and robustness versions."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lock, dr = r.get("lock") or {}, (r.get("lock") or {}).get("data_run") or {}
+    lines = [f"AEM RESULTS H2–H6 {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · config {str(r.get('config_sha256', ''))[:12]} ({r.get('lock_status', '')}"
+             + (f" {lock.get('locked_at_utc')}" if lock.get("locked_at_utc") else "") + ")"
+             + (f" · data run v{dr.get('release')} {dr.get('repo_commit')} {dr.get('generated_utc')}" if dr else "")]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("lock ok · data run ok · gates all passed in the data run" if not problems
+                                 else "STOPPED – " + " | ".join(problems)))
+    if r.get("inputs"):
+        lines.append("WINDOWS   " + _items(r["inputs"]))
+    h2 = r.get("h2")
+    if h2:
+        lines.append(f"H2        3x within 3 years · {h2['windows']:,} windows with the cohort's inputs known ({h2['firms']:,} firms) · "
+                     f"base rate {_share(h2['base_rate'])}")
+        for k in ("H2a", "H2b"):
+            m = h2["main"][k]
+            lines.append(f"{k}       {_lr_line(m)} · Holm {_p(m.get('holm_p'))} · {m.get('verdict')}")
+        lines.append(f"PLACEBO   insider sale, no purchase · {_lr_line(h2['placebo'])}")
+        for row in h2.get("h2c") or []:
+            lines.append("H2c       " + _kv(row))
+        t = h2.get("h2c_test") or {}
+        lines.append(f"H2c       opportunistic minus routine only · difference {_share(t.get('difference'), True)} "
+                     f"(95% {_share(t.get('ci_low'), True)} to {_share(t.get('ci_high'), True)}) · p {_p(t.get('p_two_sided'))}")
+        for row in h2.get("ablation") or []:
+            lines.append(f"ABLATION  {row['cohort']} · {_lr_line(row)}")
+    h3 = r.get("h3")
+    if h3 and h3.get("windows"):
+        lines.append(f"H3        {h3['windows']:,} paired windows ({h3['firms']:,} firms) · P(3x in 3y) {_share(h3['p_3x_3y'])} · "
+                     f"P(6.24x in 5y) {_share(h3['p_624x_5y'])} · ratio {_f(h3['ratio'])} (95% {_f(h3['ci_low'])} to "
+                     f"{_f(h3['ci_high'])}) · p {_p(h3['p_two_sided'])} · {h3['verdict']} · five-year multiple reached as often "
+                     f"as 3x in three years: {_f(h3['equivalent_multiple_5y'])}x")
+    h4 = r.get("h4")
+    if h4:
+        lines.append(f"H4        10x within 5 years · fitted on start dates to 2016 ({h4['fit_windows']:,} windows, base rate "
+                     f"{_share(h4['fit_base_rate'])}) · tested on 2017–2021 ({h4['test_windows']:,} windows, base rate "
+                     f"{_share(h4['test_base_rate'])})")
+        for s in h4.get("table") or []:
+            lines.append(f"H4        {s['name']} · fit LR {_f(s['fit_lr'])} · test LR {_f(s['test_lr'])} (95% {_f(s['test_ci_low'])} to "
+                         f"{_f(s['test_ci_high'])}) · hit rate {_share(s['test_hit_rate_with_signal'])} with the signal "
+                         f"({s['test_with_signal']:,} windows) · p {_p(s['p_one_sided'])} · Holm {_p(s['holm_p'])} · {s['verdict']}"
+                         f" · unknown {_share(s['left_out_share'])}")
+    m2 = r.get("m2")
+    if m2:
+        lines.append(f"M2        10x logit, start-date fixed effects, firm clusters · {m2.get('windows', 0):,} complete windows "
+                     f"(left out {_share(m2.get('left_out_share'))})")
+        for row in m2.get("coefficients") or []:
+            lines.append(_coef_line("M2        ", row))
+        for row in m2.get("brier") or []:
+            lines.append("BRIER     " + _kv({k: (f"{v:.5f}" if k in ("brier", "ci_low", "ci_high") and _fin(v) else v) for k, v in row.items()}))
+        if m2.get("terminal_uses"):
+            lines.append(f"BRIER     the terminal uses {m2['terminal_uses']} (H4 benchmark rule)")
+    m1 = r.get("m1")
+    if m1:
+        lines.append(f"M1        ordered logit on the five-year buckets · {m1.get('windows', 0):,} complete windows · converged "
+                     f"{m1.get('converged')}")
+        for row in m1.get("coefficients") or []:
+            lines.append(_coef_line("M1        ", row))
+    for label, key in (("H5 expl  ", "h5"), ("H6 expl  ", "h6"), ("TOUCHED   ", "touch_years"), ("DELISTED  ", "delisting_classes"),
+                       ("ROBUST    ", "robustness"), ("ROBUST B  ", "robustness_b")):
+        for row in r.get(key) or []:
+            lines.append(label + _kv(row))
+    if r.get("not_computed"):
+        lines.append("PENDING   robustness versions that need a rebuilt panel, not computed here: " + "; ".join(r["not_computed"]))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
