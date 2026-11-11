@@ -54,10 +54,10 @@ review_before_lock:
     have entry financials, an offer price and a visible exit; then fix the sample rules
     below.
   - >-
-    Check the extracted terms (offer price, equity and debt commitments, sponsor) as
-    the validation section says: 30 deals drawn by a fixed seed, read against the
-    passages they came from, and a second filing for every deal; target 90% correct
-    before the terms are used.
+    Check the extracted terms as the validation section says: 30 deals drawn by a fixed
+    seed, read against the passages they came from, and a second filing for every deal.
+    Each term has its own gate (validation.term_gates): 90% correct or it is not used.
+    The offer price and the buyer type, which the hypotheses need, have passed.
   - >-
     Agree the hypotheses below with Felix (drafted by Claude on Nov 6, 2026), then set
     study.status to final.
@@ -100,12 +100,29 @@ validation:
   decided: by Felix on Nov 10, 2026 (the check runs in the notebook; Claude reads the 30, Felix the disagreements)
   reading_sample:
     n: 30
-    seed: 20261111
-    development_seeds: [20261110]   # read on Nov 10: price 97%, equity 76%, debt 42%, sponsor 61% – the extractors were rebuilt on these, so a fresh sample confirms
+    seed: 20261112
+    development_seeds: [20261110, 20261111]
+    # read on Nov 10 (seed 20261110): price 97%, equity 76%, debt 42%, sponsor 61%
+    # read on Nov 11 (seed 20261111): price 100%, sponsor 89%, equity 71%, debt 72%, buyer type 30 of 30
+    # the extractors were rebuilt on both, so a fresh sample confirms
     draw: >-
       completed deals whose document was read, ordered by SHA-256 of "seed:deal_id";
       the first 30. Each is shown with every extracted value and the passage it came from.
     target: 90% of the read values correct
+  term_gates:
+    decided: by Felix on Nov 11, 2026 (precision first; the lock must not wait for the commitments)
+    rule: >-
+      A term is used only if at least 90% of its read values were correct in the latest
+      fresh reading sample. A term that misses is reported as not validated and used
+      nowhere; it does not hold up the lock. Commitments are taken only from a sentence
+      that states them (precision first) and are otherwise unknown.
+    needed_for_the_hypotheses: [offer price, buyer type]
+    descriptive_only: [sponsor name, equity commitment, debt commitment]
+    offer_price: passed (28 of 29 and 30 of 30)
+    buyer_type: passed (30 of 30 on Nov 11)
+    sponsor_name: open (16 of 18 on Nov 11)
+    equity_commitment: open
+    debt_commitment: open
   second_source:
     what: >-
       the target's own 8-K within the window around the first merger filing that names

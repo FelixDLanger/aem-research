@@ -464,3 +464,97 @@ def test_enterprise_value_stays_unknown_where_the_filing_tags_no_debt():
     v = tp.entry_values(d)
     assert v["enterprise_value"].tolist()[0] == 8e6 and np.isnan(v["enterprise_value"].iloc[1])
     assert v["equity_value"].tolist() == [1e7, 1e7] and np.isnan(v["ev_ebitda"].iloc[1])
+
+
+# ---- the second reading sample's misses (seed 20261111): commitments only where a sentence states them
+
+SECOND_SAMPLE_NOT_STATED = [
+    "liabilities relating to the transactions (including the payment of the Reverse Termination Fee pursuant to the "
+    "Merger Agreement) exceed an amount equal to $30,847,500 plus SIC Enforcement Expenses under the equity commitment letter.",
+    "management held a series of discussions with a possible investor (\"Investor A\") concerning a $5 million minority "
+    "equity investment in the common stock of the Company plus warrants through a private investment PIPE transaction.",
+    "(iii) additional equity or debt commitments of at least $60 million in the aggregate to satisfy the Additional "
+    "Financing Condition (as defined below).",
+    "Parent's liabilities for monetary damages payable for breaches under the merger agreement or the equity commitment "
+    "letters are limited to $230.0 million.",
+    "required to fund its equity commitment under the Blackstone Investor equity commitment letter if the Blackstone Asset "
+    "Purchaser acquires no less than approximately $1.2 billion of the Company's assets from the Operating Partnership.",
+    "the Company had not regained compliance with the minimum $35 million market value requirement for the Company's "
+    "common stock, the debt financing notwithstanding.",
+    "the amount by which the Company's and its subsidiaries' cash and cash equivalents exceeds $1,000,000 under the debt "
+    "commitment letter.",
+]
+
+
+@pytest.mark.parametrize("text", SECOND_SAMPLE_NOT_STATED)
+def test_amounts_that_no_sentence_states_as_a_commitment_stay_unknown(text):
+    t = tp.extract_terms(text)
+    assert np.isnan(t["equity_commitment_usd"]) and np.isnan(t["debt_commitment_usd"]), t
+
+
+SECOND_SAMPLE_STATED = [
+    ("a cash equity investment by Apax Investors in Parent of up to $322 million.", 322e6, np.nan),
+    ("Pursuant to the equity commitment letter, the equity financing sources will (i) collectively invest $230 million in "
+     "equity financing to fund capital to Advisor Group.", 230e6, np.nan),
+    ("have committed to contribute, directly or indirectly, to Parent, as equity capital, an amount of cash in immediately "
+     "available funds equal to $5,904,969,802 in the aggregate, subject to the equity commitment letters.", 5904969802.0, np.nan),
+    ("Equity commitments by the Apollo Funds in an aggregate amount of up to $1.707 billion.", 1.707e9, np.nan),
+    ("the Accel-KKR Funds have provided to Parent an equity commitment of up to $363,875,918, which we refer to as the "
+     "financing commitment.", 363875918.0, np.nan),
+    ("the Sponsors have committed, severally but not jointly, to capitalize Parent at closing with an aggregate equity "
+     "contribution in an amount of $3,750,000,000, on the terms set forth in the Equity Commitment Letter.", 3.75e9, np.nan),
+    ("Court Square Capital Partners III, L.P. has agreed to provide or cause others to provide up to $190 million of equity "
+     "financing for the merger.", 190e6, np.nan),
+    # the equity investor's amount stays the equity's although the sentence also names the debt financing
+    ("The Equity Investor has committed to invest in Parent an amount equal to $688 million, solely for the purpose of "
+     "funding (together with the proceeds of the Debt Financing) the payment.", 688e6, np.nan),
+    ("the Permira Funds and CPPIB have, in the aggregate, provided to Newco equity commitments of up to $2.542 billion; and "
+     "(2) Newco has obtained debt financing commitments from Bank of America, N.A.", 2.542e9, np.nan),
+    ("Pursuant to the debt commitment letter, the debt financing sources have committed to provide, severally but not "
+     "jointly, an aggregate of $875 million to Advisor Group, consisting of (i) an incremental revolving facility in an "
+     "aggregate principal amount of $100 million and (ii) a senior bridge facility.", np.nan, 875e6),
+    ("Debt Financing in an aggregate amount of $3,525,000,000, consisting of a senior secured term loan facility in an "
+     "aggregate principal amount of $2,700,000,000, under the Debt Commitment Letter.", np.nan, 3.525e9),
+    ("providing for debt financing through a CMBS loan and balance sheet loan in an aggregate amount of up to approximately "
+     "$4.85 billion to be funded on or after the closing.", np.nan, 4.85e9),
+    ("Debt financing in an aggregate principal amount of up to $3.2 billion as well as a committed $225 million senior "
+     "secured revolving facility.", np.nan, 3.2e9),
+    ("which letter provides for an aggregate debt commitment of $1.0 billion.", np.nan, 1.0e9),
+]
+
+
+@pytest.mark.parametrize("text,equity,debt", SECOND_SAMPLE_STATED)
+def test_stated_commitments_are_read_as_stated(text, equity, debt):
+    t = tp.extract_terms(text)
+    assert t["equity_commitment_usd"] == pytest.approx(equity, nan_ok=True), t["equity_snippet"]
+    assert t["debt_commitment_usd"] == pytest.approx(debt, nan_ok=True), t["debt_snippet"]
+
+
+def test_a_name_inside_another_firms_name_is_not_that_firm_and_one_pass_finds_all():
+    t = ("Parent, Merger Sub and the Accel-KKR Funds are affiliated with Accel-KKR, a private equity firm. "
+         "Parent is owned by funds advised by Clayton, Dubilier & Rice, LLC and by affiliates of Searchlight Capital Partners.")
+    assert tp.extract_terms(t)["sponsor"] in ("Accel-KKR", "Clayton, Dubilier & Rice", "Searchlight")
+    assert "KKR" not in tp.sponsors_named(t) and set(tp.sponsors_named(t)) == {"Accel-KKR", "Clayton, Dubilier & Rice",
+                                                                                 "Searchlight"}
+    assert tp.sponsors_named("CD&R and KKR; Kohlberg Kravis Roberts & Co.") == ["KKR", "Clayton, Dubilier & Rice"]
+
+
+def test_a_share_count_in_thousands_leaves_the_values_unknown():
+    d = pd.DataFrame({"offer_price": [7.0, 7.0, 7.0], "shares_filing": [39_730.0, 39_730.0, 4.0e7],
+                      "shares_dei": [np.nan, 3.97e7, np.nan], "net_cash": [1e6, 1e6, 1e6], "debt_missing": [False] * 3,
+                      "ebitda": [1e6] * 3, "revenue": [5e6] * 3})
+    v = tp.entry_values(d)
+    assert np.isnan(v["equity_value"].iloc[0]) and v["equity_value"].iloc[1] == 7.0 * 3.97e7
+    assert v["equity_value"].iloc[2] == 2.8e8 and v["shares_implausible"].tolist() == [True, True, False]
+
+
+def test_cached_texts_are_read_ahead_once_and_handed_out(tmp_path):
+    import gzip
+    paths = [tmp_path / f"d{i}.txt.gz" for i in range(5)]
+    for i, p in enumerate(paths[:4]):
+        p.write_bytes(gzip.compress(f"text {i}".encode()))
+    assert tp._read_ahead(paths) == 4 and tp._read_ahead(paths) == 0          # the missing one is skipped
+    paths[0].unlink()                                                         # held in memory: still readable once
+    assert tp._cached_text(None, "u", paths[0], True) == "text 0" and tp._cached_text(None, "u", paths[0], True) is None
+    assert tp._cached_text(None, "u", paths[1], True) == "text 1" and tp._cached_text(None, "u", paths[4], True) is None
+    tp._HELD.clear()

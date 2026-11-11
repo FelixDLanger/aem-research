@@ -259,7 +259,8 @@ assert (D["check_flag"] == "unchecked").sum() == EXPECT["deals"] - 3
 assert "CHECK     deals 8" in block and "second 8k 2 · second other filing 1" in block and "price 2 of 3 agree" in block
 ids = ns["CHECK_IDS"]
 assert ids == tp.check_sample(ns["DEALS"], 30, ns["cfg_a"].get("validation")["reading_sample"]["seed"])
-assert 1 <= len(ids) <= 30 and sum(line.startswith("DEV ") for line in block.splitlines()) == len(ids)
+n_dev = len(ns["cfg_a"].get("validation")["reading_sample"]["development_seeds"])        # earlier samples, one line each
+assert 1 <= len(ids) <= 30 and sum(line.startswith("DEV ") for line in block.splitlines()) == n_dev * len(ids)
 assert set(D["buyer_type"]) <= {"sponsor", "not read"} and "BUYERS    core sample 7" in block
 assert set(ids) <= set(D.index[D["completed"] & (D["text_chars"].fillna(0) > 0)])
 assert sum(line.startswith("CHECK 0") for line in block.splitlines()) == len(ids)

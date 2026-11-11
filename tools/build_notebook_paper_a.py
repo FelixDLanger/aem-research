@@ -293,7 +293,7 @@ DEALS = pd.concat([DEALS.reset_index(drop=True), reg.reset_index(drop=True)], ax
 s = tp.summary(DEALS)
 REPORT["entry"] = {k: s[k] for k in ("document_read", "main_document", "offer_price_known", "ebitda_known",
                                      "ev_ebitda_known", "equity_commitment_known", "debt_commitment_known",
-                                     "sponsor_named", "debt_tag_missing") if k in s}
+                                     "sponsor_named", "debt_tag_missing", "share_count_implausible") if k in s}
 REPORT["buyers"] = {k: s[k] for k in ("core_sample", "comparison_group", "buyers") if k in s}
 print(REPORT["entry"], REPORT["buyers"])
 """)

@@ -45,7 +45,7 @@ INDEX_SUBSETS = {"dereg": ("15-12B", "15-12G", "15-15D", "15-12B/A", "15-12G/A",
                  "ipo": ("S-1", "424B4", "424B1")}
 EXTRA_FLOWS = ("operating_income", "dna", "amortization", "pretax_income", "interest_expense")
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{name}"
-TERMS_VERSION = 3          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
+TERMS_VERSION = 4          # bump when extract_terms changes: cached texts are re-read, nothing is downloaded
 TERM_COLUMNS = ["deal_id", "doc_adsh", "main_file", "doc_url", "offer_price", "price_snippet", "price_mentions",
                 "equity_commitment_usd", "equity_snippet", "debt_commitment_usd", "debt_snippet", "sponsor",
                 "sponsor_mentions", "sponsor_snippet", "pe_cues", "trust_account_mentions", "text_chars", "terms_version",
@@ -71,11 +71,18 @@ SPONSORS = (
     "Energy Capital Partners", "ArchiMed", "Brightstar Capital", "SER Capital", "Baring Private Equity", "BPEA",
     "Avista Capital", "Fortress", "Starwood Capital", "Roark Capital", "L Catterton", "General Atlantic",
     "Bending Spoons", "Tailwind", "3G Capital", "Altaris", "Patient Square", "Nautic", "Trive Capital",
+    "Accel-KKR", "Clayton, Dubilier & Rice", "CD&R", "ICV Partners", "Reverence Capital", "Greystar",
+    "Insight Venture", "Hildred", "Crown Laboratories", "Canada Pension Plan Investment Board", "CPPIB",
 )
 # Two spellings of one firm count as one sponsor.
 SPONSOR_ALIASES = {"Symphony Technology": "STG Partners", "Kohlberg Kravis Roberts": "KKR", "Evergreen Coast": "Elliott",
-                   "Searchlight Capital": "Searchlight", "BPEA": "Baring Private Equity"}
-_SPONSOR_RE = [(s, re.compile(r"(?<![A-Za-z])" + re.escape(s) + r"(?![a-z])")) for s in SPONSORS]
+                   "Searchlight Capital": "Searchlight", "BPEA": "Baring Private Equity",
+                   "CD&R": "Clayton, Dubilier & Rice", "Insight Venture": "Insight Partners",
+                   "Canada Pension Plan Investment Board": "CPPIB"}
+# One pass finds them all; the longest name wins ("Searchlight Capital" before "Searchlight"), and a
+# name inside another firm's name is not that firm ("Accel-KKR" is not KKR).
+_SPONSOR_ANY = re.compile(r"(?<![A-Za-z\-])(?:" + "|".join(re.escape(s) for s in sorted(SPONSORS, key=len, reverse=True))
+                          + r")(?![a-z])")
 # A sponsor is the buyer's owner only where the text says so: an affiliation cue right before
 # the name, and no sign that the name is a lender, an adviser, a law firm or a comparable deal.
 _SPONSOR_CUE = re.compile(r"affiliat\w*|controlled by|formed by|managed by|advised by|sponsored by|owned by|led by|"
@@ -102,7 +109,7 @@ _VALUE_RE = re.compile(
     r"total (?:transaction |equity |enterprise )?(?:value|consideration) of)\s+(?:approximately |about |roughly )?"
     r"(?:US)?\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(million|billion)", re.I)
 # The check of the extracted terms: a second filing per deal and a seeded sample for reading.
-SECOND_VERSION = 2
+SECOND_VERSION = 3
 SECOND_QUERY = '"merger agreement" "per share"'
 SECOND_COLUMNS = ["deal_id", "second_adsh", "second_file", "second_form", "second_kind", "second_filed", "second_url",
                   "second_offer_price", "second_price_snippet", "second_equity_commitment_usd",
@@ -155,40 +162,68 @@ def _sentence_ends(text: str) -> list[int]:
     return [m.start() for m in _SENTENCE_END.finditer(text)]
 
 
-def _committed(text: str, ends: list[int], anchor: re.Pattern, own: re.Pattern, other: re.Pattern, *,
-               reach: int = 300, minimum: float = 1e6, needs: re.Pattern | None = None):
-    """For each anchor the dollar amount that belongs to it: in the anchor's own sentence, the
-    nearest one ("$X of debt financing" first, then the next amount after the anchor, then
-    the one before). Skipped: sentences about rival bids, total funds or fees; amounts that
-    are fees, caps or guarantees; amounts the sentence gives to the other kind of financing."""
+_M = r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(million|billion|thousand)?"
+_AMOUNT_OF = (r"(?:(?:in )?an? (?:aggregate |total )?(?:principal )?amount (?:in cash )?(?:of|equal to)|"
+              r"(?:aggregate|total) (?:principal )?amount (?:in cash )?(?:of|equal to)|equal to|\bof\b|"
+              r"an aggregate of)\s+(?:up to |approximately |up to approximately )?")
+# An equity commitment counts only where a sentence states it outright.
+_EQUITY_STATED = [re.compile(p, re.I) for p in (
+    # "has committed to contribute … an aggregate amount in cash equal to $88.05 million"
+    r"committed(?:,[^$,]{0,40},)? to (?:contribute|invest|capitalize|fund|purchase|provide)\b[^$]{0,230}?" + _M,
+    # "an equity commitment of up to $363,875,918", "equity financing in an amount up to $500 million"
+    r"equity (?:commitments?|financing|investments?|contributions?)\b[^$.;]{0,110}?(?:" + _AMOUNT_OF
+    + r"|in an amount up to |\bup to )" + _M,
+    # "$190 million of equity financing", "invest $230 million in equity financing"
+    _M + r"\s+(?:of|in|from)\s+(?:cash |committed |new |the )?equity (?:financing|commitments?|investments?|capital)",
+)]
+# A debt commitment likewise: the lenders' committed amount, stated as such.
+_DEBT_STATED = [re.compile(p, re.I) for p in (
+    # "debt financing in an aggregate principal amount of up to $1.950 billion"
+    r"debt financing(?: commitments?)?\b[^$.;]{0,170}?(?:" + _AMOUNT_OF + r"|\bup to )" + _M,
+    # "$2.31 billion of debt financing"
+    _M + r"\s+(?:of|in)\s+(?:committed |senior |secured |new )*debt (?:financing|commitments?)",
+    # "have committed to provide, severally but not jointly, an aggregate of $875 million"
+    r"committed(?:,[^$,]{0,40},)? to (?:provide|lend|make available|fund)\b[^$]{0,200}?" + _M,
+    # "an aggregate debt commitment of $1.0 billion"
+    r"debt commitments?\s+(?:" + _AMOUNT_OF + r"|\bup to )" + _M,
+)]
+_NOT_STATED = re.compile(r"liabilit|damages|limited to|\bcap\b|capped|PIPE|minority|at least|no less than|not? (?:to )?exceed|"
+                         r"in excess of|threshold|market value", re.I)
+
+
+def _stated(text: str, ends: list[int], patterns: list, *, own: re.Pattern, other: re.Pattern, minimum: float = 1e6):
+    """Amounts that a sentence states as this kind of commitment (value, start, end). A match
+    must lie inside one sentence that names the kind and is not about a rival bid, the total
+    bill, fees, caps or damages; between the commitment words and the amount the other kind
+    of financing must not be named ("committed to invest … debt financing … $X" is not equity)."""
     import bisect
     out = []
-    for m in anchor.finditer(text):
-        i = bisect.bisect_right(ends, m.start())
-        lo = max(ends[i - 1] if i else 0, m.start() - reach)
-        hi = min(ends[i] if i < len(ends) else len(text), m.end() + reach)
-        sentence = text[lo:hi]
-        if _SENTENCE_SKIP.search(sentence) or (needs is not None and not needs.search(sentence)):
-            continue
-        best = None
-        for a in _MONEY.finditer(text, lo, hi):
-            v = _usd(*a.groups())
-            before = text[max(lo, a.start() - 70):a.start()]
-            after = text[a.end():min(hi, a.end() + 35)].split("$")[0]      # up to the next amount
-            if v < minimum or _AMOUNT_SKIP.search(before):
+    for k, pat in enumerate(patterns):
+        for m in pat.finditer(text):
+            amount_first = pat.pattern.startswith(r"\$")
+            g = m.groups()[:3] if amount_first else m.groups()[-3:]
+            a0 = text.rfind("$", 0, (m.start(1) if amount_first else m.start(len(m.groups()) - 2)) + 1)
+            money = _MONEY.match(text, a0)
+            a1 = money.end() if money else m.end()
+            i = bisect.bisect_right(ends, m.start())
+            lo, hi = (ends[i - 1] if i else 0), (ends[i] if i < len(ends) else len(text))
+            if m.end() > hi + 2:                            # the match runs into the next sentence
                 continue
-            mine = own.search(after) is not None            # "$2.31 billion of debt financing" names its kind
-            if other.search(after) and not mine:
+            lo, hi = max(lo, m.start() - 400), min(hi, m.end() + 400)
+            sentence, between = text[lo:hi], text[m.start():a0]
+            v = _usd(*g)
+            if v < minimum or not own.search(sentence) or _SENTENCE_SKIP.search(sentence):
                 continue
-            if not mine and other.search(before[-45:]) and not own.search(before[-45:]):
-                continue                                    # "an equity investment of $1.17 billion" is not the debt
-            gap_before = m.start() - a.end()
-            rank = (0, gap_before) if 0 <= gap_before <= 30 else \
-                   (1, a.start() - m.end()) if a.start() >= m.end() else (2, gap_before)
-            if best is None or rank < best[0]:
-                best = (rank, v, a.start(), a.end())
-        if best is not None:
-            out.append(best[1:])
+            if _NOT_STATED.search(text[max(lo, m.start() - 60):a1 + 25]) or _AMOUNT_SKIP.search(text[max(lo, a0 - 70):a0]):
+                continue
+            if other.search(between) and not own.search(between):
+                continue
+            if "$" in between:                              # another amount comes first: that one is meant
+                continue
+            after = re.split(r"[$;]", text[a1:min(hi, a1 + 35)])[0]
+            if not amount_first and other.search(after) and not own.search(after):
+                continue                                    # "… and up to $2.31 billion of debt financing"
+            out.append((v, a0, a1))
     return out
 
 
@@ -221,12 +256,13 @@ def extract_terms(text: str) -> dict:
         out["offer_price"], out["price_mentions"] = best[0], len(prices)
         out["price_snippet"] = _snippet(t, best[1], best[2])
     ends = _sentence_ends(t)
-    eq = _mode(_committed(t, ends, _EQUITY_ANCHOR, _EQUITY_WORD, _DEBT_WORD))
+    # precision first: a commitment is taken only from a sentence that states it; else unknown
+    eq = _mode(_stated(t, ends, _EQUITY_STATED, own=_EQUITY_WORD, other=_DEBT_WORD))
     if eq is not None:
         out["equity_commitment_usd"], out["equity_snippet"] = eq[0], _snippet(t, eq[1], eq[2])
-    debt = _mode(_committed(t, ends, _DEBT_ANCHOR, _DEBT_WORD, _EQUITY_WORD,
-                            needs=re.compile(r"commit|debt financing", re.I)))
-    if debt is not None:
+    debts = _stated(t, ends, _DEBT_STATED, own=_DEBT_WORD, other=_EQUITY_WORD, minimum=1e7)
+    if debts:                                               # several tranches: the largest stated amount is the total
+        debt = max(debts, key=lambda d: (d[0], -d[1]))
         out["debt_commitment_usd"], out["debt_snippet"] = debt[0], _snippet(t, debt[1], debt[2])
     owners = _owning_sponsors(t)
     if owners:
@@ -241,15 +277,14 @@ def extract_terms(text: str) -> dict:
 def _owning_sponsors(t: str) -> dict:
     """Sponsors the text names as the buyer's owner: {name: (mentions with a cue, first start, first end)}."""
     found = {}
-    for s, rx in _SPONSOR_RE:
-        name = SPONSOR_ALIASES.get(s, s)
-        for m in rx.finditer(t):
-            if not _SPONSOR_CUE.search(t[max(0, m.start() - 90):m.start()]):
-                continue
-            if _SPONSOR_NOT.search(t[max(0, m.start() - 150):min(len(t), m.end() + 12)]):
-                continue
-            n, a, b = found.get(name, (0, m.start(), m.end()))
-            found[name] = (n + 1, a, b) if a <= m.start() else (n + 1, m.start(), m.end())
+    for m in _SPONSOR_ANY.finditer(t):
+        name = SPONSOR_ALIASES.get(m.group(0), m.group(0))
+        if not _SPONSOR_CUE.search(t[max(0, m.start() - 90):m.start()]):
+            continue
+        if _SPONSOR_NOT.search(t[max(0, m.start() - 150):min(len(t), m.end() + 12)]):
+            continue
+        n, a, b = found.get(name, (0, m.start(), m.end()))
+        found[name] = (n + 1, a, b)
     return found
 
 
@@ -257,11 +292,9 @@ def sponsors_named(text: str) -> list[str]:
     """Every known sponsor the text names, most mentioned first (two spellings count once)."""
     t = " ".join(str(text).split())
     counts: dict = {}
-    for s, rx in _SPONSOR_RE:
-        n = len(rx.findall(t))
-        if n:
-            name = SPONSOR_ALIASES.get(s, s)
-            counts[name] = max(counts.get(name, 0), n)
+    for m in _SPONSOR_ANY.finditer(t):
+        name = SPONSOR_ALIASES.get(m.group(0), m.group(0))
+        counts[name] = counts.get(name, 0) + 1
     return [s for s, n in sorted(counts.items(), key=lambda f: (-f[1], f[0]))]
 
 
@@ -299,8 +332,33 @@ def index_url(cik: int, adsh: str) -> str:
     return document_url(cik, adsh, f"{adsh}-index.htm")
 
 
+_HELD: dict = {}           # compressed texts read ahead from Drive, each handed out once
+
+
+def _read_ahead(paths, workers: int = 8) -> int:
+    """Read the cached texts among `paths` into memory in parallel. Drive answers one file
+    per second or so; eight at a time, a re-read of all documents takes minutes, not an hour."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def load(path):
+        try:
+            return path, path.read_bytes()
+        except OSError:
+            return path, None
+    todo = [p for p in dict.fromkeys(paths) if p not in _HELD]
+    if not todo:
+        return 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        got = [(p, b) for p, b in pool.map(load, todo) if b is not None]
+    _HELD.update(got)
+    return len(got)
+
+
 def _cached_text(client, url: str, path: Path, offline: bool, transform=None) -> str | None:
     """Text of `url`, kept gzipped on Drive; None when it is not there (404) or not cached offline."""
+    held = _HELD.pop(path, None)
+    if held is not None:
+        return gzip.decompress(held).decode("utf-8", errors="ignore")
     if path.exists():
         return gzip.decompress(path.read_bytes()).decode("utf-8", errors="ignore")
     if offline or client is None:
@@ -337,12 +395,18 @@ def read_documents(deals: pd.DataFrame, *, client=None, cache_dir, offline: bool
             save_table(pd.DataFrame(list(have.values()) + [r for r in done if (r["deal_id"], r["doc_adsh"]) not in have]),
                        cache_dir / "terms")
 
+    todo = [(d.deal_id, d.doc_adsh) for d in deals.itertuples() if (d.deal_id, d.doc_adsh) not in have]
+    ahead = {(d.deal_id, d.doc_adsh): docs / (f"{d.doc_adsh}_{_safe(d.doc_file)}.txt.gz" if bool(d.doc_is_main)
+                                              else f"{d.doc_adsh}-index.htm.gz") for d in deals.itertuples()}
+    order = {key: k for k, key in enumerate(todo)}
     for n, d in enumerate(deals.itertuples(), 1):
         key = (d.deal_id, d.doc_adsh)
         if key in have:
             rows.append(have[key])
             stats["cached"] += 1
             continue
+        if order[key] % 40 == 0:                           # the next 40 texts, read from Drive together
+            _read_ahead([ahead[x] for x in todo[order[key]:order[key] + 40]])
         cik, adsh = int(d.target_cik), str(d.doc_adsh)
         main = d.doc_file if bool(d.doc_is_main) else None
         try:
@@ -530,6 +594,7 @@ def entry_financials(deals: pd.DataFrame, facts: pd.DataFrame, subs: pd.DataFram
     return out
 
 
+MIN_SHARES = 100_000       # no listed target has fewer shares; a smaller count is in thousands
 BUYER_TYPES = ("sponsor", "sponsor not on the list", "strategic or unclear", "SPAC merger", "not read")
 
 
@@ -562,8 +627,11 @@ def entry_values(deals: pd.DataFrame) -> pd.DataFrame:
             d[c] = np.nan
     # the latest filing's share count (cover page, else weighted-average shares: the SEC data
     # sets rarely carry the cover page), the cover page alone where that is all there is
+    # A count below MIN_SHARES is a filing that tags its shares in thousands: unknown, not small.
     shares = pd.to_numeric(d["shares_filing"], errors="coerce")
-    shares = shares.where(shares > 0, pd.to_numeric(d["shares_dei"], errors="coerce"))
+    cover = pd.to_numeric(d["shares_dei"], errors="coerce")
+    d["shares_implausible"] = (shares > 0) & (shares < MIN_SHARES)
+    shares = shares.where(shares >= MIN_SHARES, cover.where(cover >= MIN_SHARES))
     d["equity_value"] = d["offer_price"] * shares
     # no debt tag in the filing is not zero debt: the enterprise value stays unknown there
     no_debt_tag = d["debt_missing"].fillna(False).astype(bool)
@@ -740,12 +808,18 @@ def read_second(deals: pd.DataFrame, picks: pd.DataFrame, *, client=None, cache_
             save_table(pd.DataFrame([r for k, r in have.items() if k not in keys] + done).reindex(columns=SECOND_COLUMNS),
                        cache_dir / "second")
 
+    todo = [docs / f"{p.second_adsh}_{_safe(p.second_file)}.txt.gz" for p in picks.itertuples()
+            if (p.deal_id, p.second_adsh, p.second_file) not in have]
+    seen = 0
     for p in picks.itertuples():
         key = (p.deal_id, p.second_adsh, p.second_file)
         if key in have:
             rows.append(have[key])
             stats["cached"] += 1
             continue
+        if seen % 80 == 0:
+            _read_ahead(todo[seen:seen + 80])
+        seen += 1
         rec = {"deal_id": p.deal_id, "second_adsh": p.second_adsh, "second_file": p.second_file,
                "second_form": p.second_form, "second_kind": p.second_kind, "second_filed": p.second_filed}
         try:
@@ -1009,6 +1083,8 @@ def summary(deals: pd.DataFrame) -> dict:
         out["buyers"] = ", ".join(f"{k} {int(counts.get(k, 0))}" for k in BUYER_TYPES if counts.get(k, 0))
         out["core_sample"] = int(d["core_sample"].sum())
         out["comparison_group"] = int(d["comparison_group"].sum())
+    if "shares_implausible" in d.columns:
+        out["share_count_implausible"] = int(d["shares_implausible"].fillna(False).astype(bool).sum())
     if "debt_missing" in d.columns:
         out["debt_tag_missing"] = float(d["debt_missing"].fillna(False).astype(bool).mean())
     if "sic" in d.columns:
