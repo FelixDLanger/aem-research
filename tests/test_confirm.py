@@ -107,3 +107,29 @@ def test_the_calendar_continues_the_locked_one_to_the_last_confirmation_date(cfg
     d = confirm.all_dates(Cfg(), cfg_c)
     assert d[0] == pd.Timestamp("2013-01-01") and d[-1] == pd.Timestamp("2025-07-01") and len(d) == 51
     assert set(pd.to_datetime(cfg_c.get("dates.one_year"))) <= set(d)
+
+
+def test_last_checks_show_both_sides_and_hold_the_ratio_within_start_dates(cfg_c):
+    f, rng = _features()
+    f["sic"] = np.where(np.arange(len(f)) % 5 == 0, 2834, 7372)
+    w = confirm.windows(f, _outcomes(f, rng))
+    w = w[w["start_date"] <= "2024-07-01"]
+    rows = confirm.both_sides(w, "fallen", "end2", "new")
+    assert [r["group"] for r in rows] == ["with fallen", "without fallen"] and sum(r["windows"] for r in rows) == len(w)
+    assert all(0 <= r["share_end_below_half"] <= r["share_end_below_1"] <= 1 and r["p10_end"] <= r["median_end"] <= r["p90_end"] for r in rows)
+    by_date, st = confirm.within_dates(w, "fallen", "hit2_2y", resamples=300)
+    assert len(by_date) == 4 and st["dates"] == 4 and st["ratio_within_dates"] > 1 and st["ci_low"] <= st["ratio_within_dates"] <= st["ci_high"]
+    # a signal that is only a date effect: on in the one date where everything rises, off elsewhere
+    d0 = w["start_date"].min()
+    timing = w.assign(sig=w["start_date"].eq(d0), hit=np.where(w["start_date"].eq(d0), 1.0, 0.0))
+    _, t = confirm.within_dates(timing, "sig", "hit", resamples=100)
+    assert t["ratio_pooled"] != t["ratio_pooled"] or t["ratio_pooled"] > 1          # pooled: infinite or large
+    assert not (t["ratio_within_dates"] > 1)                                        # within dates nothing is left
+    sub = confirm.subsets(w, "hit2_2y", "bucket2", resamples=200).set_index("subset")
+    assert list(sub.index) == ["all", "without pharma and biotech", "pharma and biotech only", "smaller half by market cap",
+                               "larger half by market cap"]
+    assert sub.loc["without pharma and biotech", "windows"] + sub.loc["pharma and biotech only", "windows"] == sub.loc["all", "windows"]
+    assert sub.loc["all", "fcf_odds_ratio"] > 1
+    out = confirm.last_checks(None, w, resamples=200)
+    assert {r["split"] for r in out["sides"]} == {"new dates, two years"} and len(out["sides"]) == 6 and len(out["dates"]) == 4
+    assert out["stratified"][0]["hit"] == "2x within two years" and confirm.last_checks(None, None) == {"sides": [], "dates": [], "stratified": [], "subsets": []}

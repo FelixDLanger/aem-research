@@ -452,6 +452,12 @@ def exits_block(report: dict) -> str:
     for label, key in (("PACE      ", "wsib_pace"), ("VINTAGE   ", "wsib_vintages")):
         for row in r.get(key) or []:
             lines.append(label + _kv({k: (str(v)[:10] if k == "report_date" and v is not None else v) for k, v in row.items()}))
+    if r.get("last_inputs"):
+        lines.append("B LAST    exploratory, from the saved tables · " + _items(r["last_inputs"]))
+    last = r.get("last_checks") or {}
+    for label, key in (("B SIDES   ", "sides"), ("B DATES   ", "dates"), ("B WITHIN  ", "stratified"), ("B SUBSET  ", "subsets")):
+        for row in last.get(key) or []:
+            lines.append(label + _kv(row))
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)

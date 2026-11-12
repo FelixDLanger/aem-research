@@ -34,6 +34,7 @@ md("""
 1. **Exit values.** For every completed deal that was later sold to a listed buyer, the buyer's 8-K and its press release are fetched from EDGAR (about 135 filings, a few minutes; texts are kept on Drive) and the stated price is read from the sentences around the target's name. The block prints the tables **and a seeded sample of 30 filings with the sentence each value came from**, which I read to measure the extraction's accuracy.
 2. **Value between entry and exit.** Exit value over entry enterprise value, years held, the annual rate – by entry regime, exit regime and buyer type – and whether value growth follows the public benchmark's multiple over the same span.
 3. **WSIB before March 2023.** The quarterly reports from 2016 on are requested again; the block names each one that is missing or could not be read, and extends the pace of distributions as far back as the reports go.
+4. **Paper B, last checks (exploratory, from the saved tables):** the whole outcome distribution with and without the fall, positive free cash flow and low dilution (the loss side next to the gain side); the fall's ratio start date by start date and combined within start dates; both without pharma and biotech and by size half.
 
 Needs the `SEC_USER_AGENT` secret (as notebook 02). Nothing the locked runs saved is overwritten. Each step runs on its own.
 
@@ -202,6 +203,27 @@ if not problems:
             BOOK["WSIB vintages"] = par.wsib_vintages(WSIB, strategies)
             REPORT["wsib_pace"], REPORT["wsib_vintages"] = rec(BOOK["WSIB pace"]), rec(BOOK["WSIB vintages"])
             show(BOOK["WSIB pace"])
+""")
+
+code("""
+# ── Paper B · last checks before the papers, from the tables on Drive (exploratory) ──
+if not problems:
+    with LOG.phase("Paper B last checks"):
+        from aem_research import confirm, estimators as est
+        boot = cfg_b.get("estimation.bootstrap")
+        F_, O_ = load_table(paths.cache / "features"), load_table(paths.output / "outcomes")
+        FC_, OC_ = load_table(paths.cache / "features_confirm"), load_table(paths.output / "outcomes_confirm")
+        w_locked = est.windows(F_, O_) if F_ is not None and O_ is not None else None
+        w_new = confirm.windows(FC_, OC_) if FC_ is not None and OC_ is not None else None
+        REPORT["last_inputs"] = {"locked_windows": 0 if w_locked is None else int(len(w_locked)),
+                                 "new_windows": "not on Drive (run notebook 08 v16 first)" if w_new is None else int(len(w_new))}
+        LAST = confirm.last_checks(w_locked, w_new, resamples=min(int(boot["resamples"]), 1000), seed=int(boot["seed"]))
+        REPORT["last_checks"] = LAST
+        for name, key in (("B both sides", "sides"), ("B fall by date", "dates"), ("B fall within dates", "stratified"),
+                          ("B subsets", "subsets")):
+            if LAST[key]:
+                BOOK[name] = pd.DataFrame(LAST[key])
+                show(BOOK[name])
     if BOOK:
         with LOG.phase("save"):
             write_workbook(paths.output / "paper_a_exits.xlsx", {k: v for k, v in BOOK.items() if len(v)})

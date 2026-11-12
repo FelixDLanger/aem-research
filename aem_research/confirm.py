@@ -322,3 +322,113 @@ def base_rate_row(name: str, w: pd.DataFrame) -> dict:
             "touch_3x_3y": float(w["hit3_3y"].mean()), "touch_10x_5y": float(w["hit10_5y"].mean()),
             "resolved_3y": int(w["hit3_3y"].notna().sum()), "resolved_5y": int(w["hit10_5y"].notna().sum()),
             "mean_end_5y": float(w["end5"].mean())}
+
+
+# ---------------------------------------------------------------------------
+# Last checks before the papers (exploratory; notebook 09): what a reviewer asks of C2 and of
+# the free-cash-flow screen once the headline tests are in
+# ---------------------------------------------------------------------------
+
+PHARMA_SIC = (2833, 2834, 2835, 2836, 8731)
+
+
+def both_sides(w: pd.DataFrame, flag: str, end: str, label: str) -> list[dict]:
+    """The whole distribution of the end multiple with and without a flag: a signal that only
+    widens the distribution shows a fatter loss side next to its fatter gain side."""
+    x = w[w[end].notna() & est._flag(w[flag]).notna()] if flag in w.columns and end in w.columns else w.iloc[0:0]
+    f = est._flag(x[flag]) if len(x) else pd.Series(dtype=float)
+    rows = []
+    for name, v in (("with", 1.0), ("without", 0.0)):
+        g = x[f.eq(v)]
+        e = g[end].to_numpy(dtype=float)
+        if not len(e):
+            continue
+        rows.append({"split": label, "group": f"{name} {flag}", "windows": int(len(g)), "firms": int(g["firm"].nunique()),
+                     "mean_end": float(e.mean()), "median_end": float(np.median(e)), "p10_end": float(np.quantile(e, 0.1)),
+                     "p90_end": float(np.quantile(e, 0.9)), "share_end_below_half": float((e < 0.5).mean()),
+                     "share_end_below_1": float((e < 1).mean()), "share_end_at_least_2x": float((e >= 2).mean())})
+    return rows
+
+
+def within_dates(w: pd.DataFrame, signal: str, hit: str, *, resamples: int = 1000, seed: int = 20261106) -> tuple[pd.DataFrame, dict]:
+    """The hit rate with the signal over the hit rate without it, start date by start date and
+    combined within start dates (Mantel-Haenszel weights): a signal that is merely more common
+    on dates before a market-wide rebound loses its ratio here. Firm-cluster bootstrap."""
+    x = w[w[hit].notna() & est._flag(w[signal]).notna()] if signal in w.columns and hit in w.columns else w.iloc[0:0]
+    if not len(x):
+        return pd.DataFrame(), {"windows": 0}
+    s, h = est._flag(x[signal]).to_numpy(dtype=float), x[hit].to_numpy(dtype=float)
+    fc, firms = pd.factorize(x["firm"].to_numpy())
+    dc, dates = pd.factorize(pd.to_datetime(x["start_date"]).to_numpy(), sort=True)
+    cols = np.column_stack([s * h, s, (1 - s) * h, 1 - s])                # a, n1, c, n0
+    cell = np.zeros((len(firms), len(dates), 4))
+    np.add.at(cell, (fc, dc), cols)
+    tot = cell.sum(axis=0)
+    by_date = pd.DataFrame({"start_date": pd.to_datetime(dates).strftime("%Y-%m-%d"), "windows": (tot[:, 1] + tot[:, 3]).astype(int),
+                            "with_signal": tot[:, 1].astype(int),
+                            "hit_rate_with": np.divide(tot[:, 0], tot[:, 1], out=np.full(len(dates), np.nan), where=tot[:, 1] > 0),
+                            "hit_rate_without": np.divide(tot[:, 2], tot[:, 3], out=np.full(len(dates), np.nan), where=tot[:, 3] > 0)})
+    by_date["ratio"] = by_date["hit_rate_with"] / by_date["hit_rate_without"].where(by_date["hit_rate_without"] > 0)
+
+    def mh(t):                                             # t: (..., dates, 4)
+        n = t[..., 1] + t[..., 3]
+        num = np.where(n > 0, t[..., 0] * t[..., 3] / np.where(n > 0, n, 1), 0).sum(axis=-1)
+        den = np.where(n > 0, t[..., 2] * t[..., 1] / np.where(n > 0, n, 1), 0).sum(axis=-1)
+        return np.divide(num, den, out=np.full(np.shape(num), np.nan), where=den > 0)
+
+    def pooled(t):
+        a, n1, c, n0 = (t[..., k].sum(axis=-1) for k in range(4))
+        return np.divide(a * n0, c * n1, out=np.full(np.shape(a), np.nan), where=(c * n1) > 0)
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, len(firms), size=(int(resamples), len(firms)))
+    wts = np.zeros((int(resamples), len(firms)))
+    np.add.at(wts, (np.arange(int(resamples))[:, None], draws), 1.0)
+    boot = np.einsum("bf,fdk->bdk", wts, cell, optimize=True)
+    b = mh(boot)
+    lo, hi = est._ci(b)
+    out = {"windows": int(len(x)), "dates": int(len(dates)), "ratio_pooled": float(pooled(tot)), "ratio_within_dates": float(mh(tot)),
+           "ci_low": lo, "ci_high": hi, "p_one_sided": est._p_above(b),
+           "dates_with_ratio_above_1": int((by_date["ratio"] > 1).sum())}
+    return by_date, out
+
+
+def subsets(w: pd.DataFrame, hit: str, bucket: str, *, resamples: int = 1000, seed: int = 20261106) -> pd.DataFrame:
+    """The fall's ratio and the free-cash-flow coefficient without pharma and biotech, and in
+    the smaller and the larger half of each start date's universe by market cap."""
+    sic = pd.to_numeric(w.get("sic"), errors="coerce") if "sic" in w.columns else pd.Series(np.nan, index=w.index)
+    cap = pd.to_numeric(w["market_cap"], errors="coerce")
+    big = cap >= cap.groupby(w["start_date"]).transform("median")
+    rows = []
+    for name, g in (("all", w), ("without pharma and biotech", w[~sic.isin(PHARMA_SIC)]), ("pharma and biotech only", w[sic.isin(PHARMA_SIC)]),
+                    ("smaller half by market cap", w[~big]), ("larger half by market cap", w[big])):
+        r = _lr(g, "fallen", hit, {"resamples": int(resamples), "seed": int(seed)})
+        row = {"subset": name, "windows": int(g[hit].notna().sum()), "fall_lr": r.get("lr"), "fall_ci_low": r.get("ci_low"),
+               "fall_ci_high": r.get("ci_high")}
+        try:
+            c = _c1(g, bucket)
+        except Exception as exc:                           # a subset the model cannot be fitted on is reported, not fatal
+            c = {"note": f"{type(exc).__name__}"}
+        row.update({"fcf_odds_ratio": c.get("fcf_pos_odds_ratio", np.nan), "fcf_p_one_sided": c.get("fcf_pos_p_one_sided", np.nan),
+                    "low_dilution_odds_ratio": c.get("low_dilution_odds_ratio", np.nan), "model_windows": c.get("windows", 0)})
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def last_checks(w_locked: pd.DataFrame | None, w_new: pd.DataFrame | None, *, resamples: int = 1000, seed: int = 20261106) -> dict:
+    """Every last check on the windows that are on Drive; a missing table is skipped."""
+    sides, dates, strat, subs = [], [], [], []
+    kw = {"resamples": resamples, "seed": seed}
+    for label, w, end, hit, bucket in (("new dates, two years", w_new, "end2", "hit2_2y", "bucket2"),
+                                       ("locked dates, five years", w_locked, "end5", "hit3_3y", "bucket5")):
+        if w is None or not len(w):
+            continue
+        for flag in ("fallen", "fcf_pos", "low_dilution"):
+            sides += both_sides(w, flag, end, label)
+        horizon = "2x within two years" if hit == "hit2_2y" else "3x within three years"
+        bd, st = within_dates(w, "fallen", hit, **kw)
+        strat.append({"sample": label, "signal": "fallen", "hit": horizon, **st})
+        if hit == "hit2_2y" and len(bd):
+            dates += [{"sample": label, **r} for r in bd.dropna(subset=["ratio"]).to_dict("records")]
+        s = subsets(w, hit, bucket, **kw)
+        subs += [{"sample": label, **r} for r in s.to_dict("records")]
+    return {"sides": sides, "dates": dates, "stratified": strat, "subsets": subs}

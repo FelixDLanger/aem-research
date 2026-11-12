@@ -169,8 +169,13 @@ assert "X VALUE   by all · group all usable sales · n 1 · median value multip
 assert "X TRACK   value growth against the benchmark's multiple · n " in block
 assert f"READ 01 " in block and "(transaction)" in block and "ex99.htm" in block
 assert "WSIB      reports asked " in block and "WSIB      missing: " in block and "PACE      report date 20" in block
+assert "B LAST    exploratory, from the saved tables · locked windows " in block and "new windows not on Drive" in block
+for label in ("B SIDES   split locked dates, five years · group with fallen", "B SIDES   split locked dates, five years · group without fcf_pos",
+              "B WITHIN  sample locked dates, five years · signal fallen · hit 3x within three years",
+              "B SUBSET  sample locked dates, five years · subset without pharma and biotech"):
+    assert label in block, label
 wb = pd.read_excel(OUTPUT / "paper_a_exits.xlsx", sheet_name=None, engine="openpyxl")
-assert {"Exit values", "Exit groups", "Exit reading", "WSIB pace"} <= set(wb), set(wb)
+assert {"Exit values", "Exit groups", "Exit reading", "WSIB pace", "B both sides", "B fall within dates", "B subsets"} <= set(wb), set(wb)
 after = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
 assert all(after[k] == v for k, v in before.items()), "a table of the locked run was rewritten"
 assert {n.split(".")[0] for n in set(after) - set(before)} == {"exits", "wsib_funds_full"}, set(after) - set(before)
