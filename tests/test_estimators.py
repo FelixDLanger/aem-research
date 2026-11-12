@@ -216,3 +216,46 @@ def test_a_flag_that_never_varies_or_never_hits_is_reported_not_estimated(w):
     from aem_research.report import _coef_line
     assert _coef_line("M2        ", {"regressor": "insider_cluster", "coef": float("nan"), "note": "no variation in the sample"}) == \
         "M2        insider_cluster · not estimated: no variation in the sample"
+
+
+# ---- follow-up robustness (notebook 08)
+
+def test_resampling_start_years_with_firms_widens_the_interval_where_a_year_carries_the_result(w):
+    a = est.likelihood_ratio(w, "s1_proxy", "hit10_5y", resamples=400)
+    b = est.likelihood_ratio_two_way(w, "s1_proxy", "hit10_5y", resamples=400)
+    assert b["lr"] == pytest.approx(a["lr"]) and b["windows"] == a["windows"] and b["years"] == 9
+    assert (b["ci_high"] - b["ci_low"]) >= 0.9 * (a["ci_high"] - a["ci_low"])
+    # a signal that is switched on in one hot year only: firms alone look certain, years do not
+    hot = w.assign(sig=w["start_year"].eq(2020))
+    f1, f2 = est.likelihood_ratio(hot, "sig", "hit3_3y", resamples=400), est.likelihood_ratio_two_way(hot, "sig", "hit3_3y", resamples=400)
+    assert f1["ci_low"] > 1 and (f2["ci_high"] - f2["ci_low"]) > 1.5 * (f1["ci_high"] - f1["ci_low"])
+    t = est.two_way_table(w, resamples=200)
+    assert list(t["test"][:2]) == ["H2a", "H2b"] and len(t) == 10 and (t["two_way_ci_low"] <= t["lr"]).all()
+    assert est.likelihood_ratio_two_way(w.iloc[0:0], "s1_proxy", "hit10_5y")["windows"] == 0
+
+
+def test_the_universe_is_redrawn_under_another_floor_and_weak_split_windows_are_found(world):
+    f, o = world
+    cfg = {"universe": {"min_price_usd": 1.0, "market_cap_usd": {"min": 1e8, "max": 2e9}}}
+    f = f.assign(is_filer=True, sic=7372, entry_price_unadjusted=np.where(f["cik"] % 10 == 0, 0.5, 12.0), liquid=True, listed=True,
+                 breadth=50.0)
+    f["market_cap"] = np.where(f["cik"] % 7 == 0, 7e7, 5e8)
+    base = est.universe_variant(f, cfg)
+    assert base["in_universe"].sum() == ((f["cik"] % 10 != 0) & (f["cik"] % 7 != 0)).sum()
+    small = est.universe_variant(f, cfg, cap_min=5e7)
+    cheap = est.universe_variant(f, cfg, min_price=0.0)
+    assert small["in_universe"].sum() == (f["cik"] % 10 != 0).sum() and cheap["in_universe"].sum() == (f["cik"] % 7 != 0).sum()
+    assert small.loc[small["in_universe"], "low_attention"].notna().all() and small.loc[~small["in_universe"], "low_attention"].isna().all()
+    assert not est.universe_variant(f.assign(sic=6770), cfg)["in_universe"].any()
+    w = est.windows(f.assign(in_universe=True), o)
+    splits = pd.DataFrame({"cik": [1, 2, 3, 4], "period": pd.to_datetime(["2016-06-30", "2016-06-30", "2016-06-30", "2030-01-01"]),
+                           "kind": ["split", "split", "jump", "split"], "ratio": [2.0, 0.1, 1.0, 2.0],
+                           "evidence": ["holders", "CUSIP change + holders (median)", "implausible jump", "filings"]})
+    crossed = est.weak_split_windows(w, splits, 5)
+    hit = w[crossed]
+    assert set(hit["firm"]) == {2, 3}                                         # strong evidence and a split after the data do not count
+    assert hit["start_date"].min() >= pd.Timestamp("2013-07-01") and hit["start_date"].max() < pd.Timestamp("2016-06-30")
+    assert (hit["start_date"] + pd.DateOffset(years=5) >= pd.Timestamp("2016-06-30")).all()
+    assert not est.weak_split_windows(w, None, 5).any() and not est.weak_split_windows(w, splits.iloc[:1], 5).any()
+    row = est.headline(w[~crossed], "x", resamples=100)
+    assert row["version"] == "x" and row["windows"] == len(w) - crossed.sum() and "lr_s1_proxy" in row

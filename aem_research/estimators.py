@@ -571,3 +571,130 @@ def run_all(features: pd.DataFrame, outcomes: pd.DataFrame, *, resamples: int = 
     return {"windows": w, "h2": h2(w, **kw), "h3": h3(w, **kw), "h4": h4(w, **kw), "m2": m2_and_benchmark(w, **kw), "m1": m1(w),
             "h5": h5_regime(w, **kw), "h6": h6_post_results(w, **kw), "touch_years": touch_years(w),
             "delisting_classes": delisting_classes(w), "robustness": robustness(w, resamples=min(resamples, 1000), seed=seed)}
+
+
+# ---------------------------------------------------------------------------
+# Follow-up robustness (notebook 08): start years resampled with firms; other universes
+# ---------------------------------------------------------------------------
+
+def likelihood_ratio_two_way(w: pd.DataFrame, signal: str, hit: str, *, resamples: int = 2000, seed: int = 20261106) -> dict:
+    """The likelihood ratio with firms and start years resampled together: a window's weight is
+    its firm's draw count times its start year's. Market-wide shocks hit every firm of a year at
+    once, so this interval is wider wherever one year carries the result."""
+    s, h = _flag(w[signal]), pd.to_numeric(w[hit], errors="coerce")
+    ok = (s.notna() & h.notna()).to_numpy()
+    x = w.loc[ok]
+    if not len(x):
+        return {"signal": signal, "windows": 0, "years": 0, "lr": np.nan, "ci_low": np.nan, "ci_high": np.nan, "p_one_sided": np.nan}
+    s, h = s[ok].to_numpy(), h[ok].to_numpy()
+    fc, firms = pd.factorize(x["firm"].to_numpy())
+    yc, years = pd.factorize(x["start_year"].to_numpy())
+    cols = np.column_stack([s * h, h, s * (1 - h), 1 - h])
+    cell = np.zeros((len(firms), len(years), 4))
+    np.add.at(cell, (fc, yc), cols)
+    rng = np.random.default_rng(seed)
+
+    def weights(n):
+        draws = rng.integers(0, n, size=(resamples, n))
+        flat = (np.arange(resamples)[:, None] * n + draws).ravel()
+        return np.bincount(flat, minlength=resamples * n).reshape(resamples, n).astype(float)
+    wf, wy = weights(len(firms)), weights(len(years))
+    boot = np.einsum("bf,fyk,by->bk", wf, cell, wy, optimize=True)
+    point = cols.sum(axis=0)
+
+    def lr(v):
+        return _div(_div(v[..., 0], v[..., 1]), _div(v[..., 2], v[..., 3]))
+    b = lr(boot)
+    lo, hi = _ci(b)
+    return {"signal": signal, "windows": int(len(x)), "years": int(len(years)), "lr": float(lr(point)), "ci_low": lo,
+            "ci_high": hi, "p_one_sided": _p_above(b)}
+
+
+def two_way_table(w: pd.DataFrame, *, resamples: int = 2000, seed: int = 20261106) -> pd.DataFrame:
+    """H2a, H2b (three-year 3x) and the eight H4 signals (five-year 10x, test period) with the
+    firm-only interval next to the firm-and-year interval."""
+    rows = []
+    x2 = w[w["cohort_known"].fillna(False).astype(bool) & w["hit3_3y"].notna()].copy()
+    cohort = _flag(x2["fallen"]).eq(1) & _flag(x2["fcf_pos"]).eq(1) & _flag(x2["net_cash_pos"]).eq(1)   # as in h2()
+    x2["h2a"] = (cohort & _flag(x2["insider_any"]).eq(1)).astype(float)
+    x2["h2b"] = (cohort & _flag(x2["insider_opportunistic"]).eq(1)).astype(float)
+    x4 = split(w[(w["start_date"] >= pd.Timestamp("2013-07-01")) & w["hit10_5y"].notna()])[1]
+    for label, g, sig, hit in ([("H2a", x2, "h2a", "hit3_3y"), ("H2b", x2, "h2b", "hit3_3y")]
+                               + [(f"H4 {SIGNAL_NAMES.get(s, s)}", x4, s, "hit10_5y") for s in H4_SIGNALS if s in w.columns]):
+        a = likelihood_ratio(g, sig, hit, resamples=resamples, seed=seed)
+        b = likelihood_ratio_two_way(g, sig, hit, resamples=resamples, seed=seed)
+        rows.append({"test": label, "windows": a["windows"], "years": b["years"], "lr": a["lr"], "firm_ci_low": a["ci_low"],
+                     "firm_ci_high": a["ci_high"], "firm_p": a["p_one_sided"], "two_way_ci_low": b["ci_low"],
+                     "two_way_ci_high": b["ci_high"], "two_way_p": b["p_one_sided"]})
+    return pd.DataFrame(rows)
+
+
+def universe_variant(features: pd.DataFrame, cfg_data: dict, *, min_price: float | None = None, cap_min: float | None = None) -> pd.DataFrame:
+    """The features with the universe redrawn under another minimum price or market-cap floor
+    (every other rule as locked), and the per-date attention tercile and relative drawdown
+    recomputed inside the new universe. The cohort flags do not depend on the universe."""
+    from .features import _tercile_low
+    u = cfg_data["universe"]
+    cap = u["market_cap_usd"]
+    f = features.copy()
+    not_spac = ~pd.to_numeric(f["sic"], errors="coerce").astype("float64").eq(6770)
+    price = float(u.get("min_price_usd", 1.0)) if min_price is None else float(min_price)
+    low = float(cap["min"]) if cap_min is None else float(cap_min)
+    f["in_universe"] = (f["is_filer"].fillna(False).astype(bool) & not_spac
+                        & (pd.to_numeric(f["entry_price_unadjusted"], errors="coerce") >= price)
+                        & pd.to_numeric(f["market_cap"], errors="coerce").between(low, float(cap["max"]))
+                        & f["liquid"].fillna(False).astype(bool) & f["listed"].fillna(False).astype(bool)).fillna(False).astype(bool)
+    f["low_attention"] = pd.Series(pd.NA, index=f.index, dtype="boolean")
+    for _, idx in f[f["in_universe"]].groupby("start_date").groups.items():
+        g = f.loc[idx]
+        f.loc[idx, "low_attention"] = _tercile_low(np.log1p(pd.to_numeric(g["breadth"], errors="coerce")), g["market_cap"])
+    return f
+
+
+def _period_end(period: pd.Series) -> pd.Series:
+    """The last day of each split's quarter, whatever form the period was saved in."""
+    if isinstance(period.dtype, pd.PeriodDtype):
+        return period.dt.end_time.dt.normalize()
+    if pd.api.types.is_datetime64_any_dtype(period):
+        return pd.to_datetime(period)
+    as_date = pd.to_datetime(period, errors="coerce")
+    if as_date.notna().mean() > 0.5:
+        return as_date
+    try:
+        return pd.Series(pd.PeriodIndex(period.astype(str), freq="Q").end_time.normalize(), index=period.index)
+    except Exception:
+        return as_date
+
+
+def weak_split_windows(w: pd.DataFrame, splits: pd.DataFrame | None, horizon_years: int) -> pd.Series:
+    """True for windows whose `horizon_years` cross a split that rests on weak evidence (the
+    holders' median, one or two holders, the filings' share counts) or a neutralized jump."""
+    if splits is None or not len(splits):
+        return pd.Series(False, index=w.index)
+    ev = splits["evidence"].fillna("").astype(str).str.lower() + " " + splits["kind"].fillna("").astype(str).str.lower()
+    weak = splits[ev.str.contains("median|few|filings|implausible|neutral", regex=True)].copy()
+    if not len(weak):
+        return pd.Series(False, index=w.index)
+    weak["cik"] = pd.to_numeric(weak["cik"], errors="coerce")
+    weak["when"] = _period_end(weak["period"])
+    weak = weak.dropna(subset=["when"])
+    by = weak.dropna(subset=["cik"]).groupby("cik")["when"].apply(lambda s: np.sort(s.to_numpy(dtype="datetime64[ns]"))).to_dict()
+    end = w["start_date"] + pd.DateOffset(years=horizon_years)
+    out = np.zeros(len(w), dtype=bool)
+    for i, (cik, a, b) in enumerate(zip(w["firm"].to_numpy(), w["start_date"].to_numpy(), end.to_numpy())):
+        d = by.get(cik)
+        if d is not None:
+            k = np.searchsorted(d, a, side="right")
+            out[i] = k < len(d) and d[k] <= b
+    return pd.Series(out, index=w.index)
+
+
+def headline(w: pd.DataFrame, name: str, *, resamples: int = 1000, seed: int = 20261106) -> dict:
+    """One robustness row: H2a, H2b, the placebo and the eight test-period ratios on `w`."""
+    r2, r4 = h2(w, resamples=resamples, seed=seed), h4(w, resamples=resamples, seed=seed)["table"]
+    row = {"version": name, "windows": int(len(w)), "h2a_lr": r2["main"]["H2a"]["lr"], "h2a_ci_low": r2["main"]["H2a"]["ci_low"],
+           "h2a_ci_high": r2["main"]["H2a"]["ci_high"], "h2a_windows": r2["main"]["H2a"]["with_signal"],
+           "h2b_lr": r2["main"]["H2b"]["lr"], "placebo_lr": r2["placebo"]["lr"]}
+    for s in r4.itertuples():
+        row[f"lr_{s.signal}"] = s.test_lr
+    return row

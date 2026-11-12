@@ -114,6 +114,33 @@ stopped = run_estimates(repo_copy("est_unlocked", None), DRIVE)
 assert "CHECKS    STOPPED – the pre-registration is not locked" in stopped and "H2a" not in stopped
 assert not (OUTPUT / "aem_results_h2_h6.xlsx").exists()
 
+
+
+def run_followup(repo: Path, drive: Path) -> str:
+    for f in ("followup.txt", "aem_followup.xlsx"):
+        (drive / "aem-research" / "output" / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(drive), AEM_REPO_DIR=str(repo))
+    nb = json.loads((repo / "notebooks" / "08_followup.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (drive / "aem-research" / "output" / "followup.txt").read_text(encoding="utf-8")
+
+
+# notebook 08 on the same Drive: the robustness versions and the inventory
+fu_block = run_followup(SCRATCH / "repo_ok", DRIVE)
+print(fu_block)
+assert fu_block.startswith("AEM FOLLOW-UP v") and "confirmation plan locked (C1, C2, C3)" in fu_block and "ERRORS    none" in fu_block
+for label in ("YEARS     test H2a", "UNIVERSE  version primary", "UNIVERSE  version market cap from US$50m", "UNIVERSE  version no minimum price",
+              "BASE RATE version primary", "NASDAQ-30 version primary (Nasdaq -55%)", "NASDAQ-30 version Nasdaq -30%",
+              "SPLITS    version without windows crossing a weak-evidence split", "ROUND 2   still to compute",
+              "DRIVE     FOLDERS", "DRIVE     TABLES", "DRIVE     features: ", "DRIVE     sec_panel: ", "DRIVE     sec_splits evidence: "):
+    assert label in fu_block, label
+wb8 = pd.read_excel(OUTPUT / "aem_followup.xlsx", sheet_name=None, engine="openpyxl")
+assert {"Start years", "Universes", "Base rates", "Nasdaq -30%", "Weak splits"} <= set(wb8), set(wb8)
+stopped = run_followup(repo_copy("fu_unlocked", None), DRIVE)          # stopped, but the inventory is still there
+assert "CHECKS    STOPPED" in stopped and "DRIVE     TABLES" in stopped and "UNIVERSE  " not in stopped
+
 # mismatch: another run of the same version
 block = run_notebook(repo_copy("mismatch", {**IDENTITY, "generated_utc": "2099-01-01 00:00 UTC"}), DRIVE)
 assert "CHECKS    STOPPED – generated_utc: the run on Drive has" in block and "H1 TOUCH" not in block, block
@@ -134,4 +161,4 @@ block = run_notebook(repo_copy("gatefail", IDENTITY), drive_g)
 assert "CHECKS    STOPPED – gate failed in the data run: split_recall 75.3% BELOW 90%" in block, block
 assert outcome_files(drive_g) == []
 
-print(f"\nNOTEBOOKS 04 AND 07 OK in all cases ({time.time() - t0:.0f}s)")
+print(f"\nNOTEBOOKS 04, 07 AND 08 OK in all cases ({time.time() - t0:.0f}s)")

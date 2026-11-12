@@ -1,0 +1,78 @@
+# Confirmation of three unplanned findings of Paper B on start dates the locked study never
+# resolved (final, locked – see config/confirmation_LOCK.json). Written before any outcome of
+# these dates was computed: the locked study's outcomes stop at start dates whose three-year
+# window had ended (July 2023); nothing after them has been priced forward.
+
+study:
+  name: AEM base rates – confirmation of the unplanned findings on new start dates
+  short_name: Confirmation
+  version: "1.0"
+  status: final
+  parent: config/preregistration.yaml (Paper B, D8 and D9 – unplanned findings stay provisional flags until confirmed on start dates added after the lock)
+
+decisions:
+  - id: K1
+    topic: confirm now, on shorter horizons
+    status: decided by Felix on Nov 11, 2026 ("Create notebook 8 as proposed with the new 3 Cs")
+    decision: >-
+      The five-year claims cannot be confirmed before 2028. The data run's prices reach
+      July 1, 2026, so start dates from October 2023 to July 2025 have a full one-year
+      outcome and October 2023 to July 2024 a full two-year outcome. None of these
+      outcomes has been computed. The three findings are tested on them at two years;
+      one year is the robustness check. A pass confirms the direction on new dates and a
+      shorter horizon, not the five-year size. All new dates lie in the regime after 2021.
+  - id: K2
+    topic: everything else as in the data run
+    status: decided by Claude on Nov 11, 2026 (no freedom left to tune)
+    decision: >-
+      Universe, features, signals, price panel, delisting returns and estimators are
+      those of the locked pre-registration and its data run. The liquidity threshold is
+      the data run's calibrated holder count (48), not recalibrated. Start dates follow
+      the locked quarterly calendar. Intervals come from the firm-cluster bootstrap with
+      the locked resamples and seed.
+
+review_before_lock: []
+
+dates:
+  two_year: ["2023-10-01", "2024-01-01", "2024-04-01", "2024-07-01"]
+  one_year: ["2023-10-01", "2024-01-01", "2024-04-01", "2024-07-01", "2024-10-01", "2025-01-01", "2025-04-01", "2025-07-01"]
+  note: >-
+    October 2023 is the locked study's last start date; its three-year window is not
+    over, so no outcome of it entered any result.
+
+outcomes:
+  horizons_years: [1, 2]
+  big_gain: touch 2x within 2 years (about the annual pace of 3x in three years)
+  big_gain_one_year: touch 1.5x within 1 year
+  buckets: the locked six-bucket grid on the two-year end multiple (one-year for the robustness check)
+
+hypotheses:
+  - id: C1
+    tier: confirmatory
+    statement: >-
+      Positive free cash flow and low dilution each shift the whole outcome distribution
+      up: in the ordered logit of the two-year end-multiple bucket on the locked M1
+      regressors with start-date fixed effects and firm-clustered errors, both
+      coefficients are above zero.
+    test: one-sided z-tests on the two coefficients, Holm across the two, 5%
+  - id: C2
+    tier: confirmatory
+    statement: >-
+      A stock at least 40% below its three-year high (the locked "fallen" flag) touches
+      2x within two years more often than the others: likelihood ratio above 1.
+    test: one-sided, firm-cluster bootstrap, 5%
+  - id: C3
+    tier: confirmatory
+    statement: >-
+      A cluster of insider purchases within 14 days after results (the locked H6 flag)
+      raises the odds of touching 2x within two years: likelihood ratio above 1.
+    test: one-sided, firm-cluster bootstrap, 5%
+
+estimation:
+  alpha: 0.05
+  multiple_testing: Holm over C1 (the weaker of its two coefficients), C2 and C3
+  bootstrap: the locked firm-cluster bootstrap (resamples and seed of config/preregistration.yaml)
+  robustness:
+    - one-year horizon on all eight dates (touch 1.5x within a year; one-year buckets)
+    - C2 and C3 among windows with positive free cash flow only
+  reporting: every result is reported, confirmed or not; a failed confirmation removes the flag from the terminal

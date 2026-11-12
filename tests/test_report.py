@@ -101,3 +101,30 @@ def test_estimates_block_prints_verdicts_and_keeps_years_as_years():
     assert "ABLATION  without the fall · " in b and "TOUCHED   event first 3x touch · year 2021 · touches 1,500 · share 31.0%" in b
     assert "PENDING   robustness versions that need a rebuilt panel, not computed here: no minimum price" in b
     assert "CHECKS    STOPPED – x" in estimates_block({"release": 14, "problems": ["x"], "run": {}})
+
+
+def test_the_drive_inventory_describes_folders_and_tables_and_survives_a_broken_file(tmp_path):
+    import pandas as pd
+    from types import SimpleNamespace
+    from aem_research import followup
+    from aem_research.io_utils import save_table
+    from aem_research.report import followup_block
+    (tmp_path / "cache" / "paper_a" / "docs").mkdir(parents=True)
+    (tmp_path / "cache" / "paper_a" / "docs" / "a.txt.gz").write_bytes(b"x" * 2000)
+    save_table(pd.DataFrame({"cik": [1, 2], "start_date": pd.to_datetime(["2013-07-01", "2023-10-01"]), "kind": ["a", "b"]}),
+               tmp_path / "cache" / "features")
+    (tmp_path / "cache" / "broken.pkl").write_bytes(b"not a table")
+    lines = followup.inventory(SimpleNamespace(work=tmp_path), [tmp_path / "cache" / "features", tmp_path / "cache" / "broken",
+                                                              tmp_path / "cache" / "nothing"])
+    text = "\\n".join(lines)
+    assert "FOLDERS" in lines and "TABLES" in lines and "cache/ · " in text and "docs/ · 1 files" in text
+    assert "features: 2 rows × 3 · start_date 2013-07-01..2023-10-01 (2 values) · cik, start_date, kind" in text
+    assert "broken: unreadable" in text and "nothing: not on Drive" in text
+    assert followup.value_counts_line(pd.DataFrame({"kind": ["a", "a", None]}), "kind") == "kind: a 2 · (missing) 1"
+    assert followup.value_counts_line(None, "kind") == "kind: not available" and followup.describe_dir(tmp_path / "x") == ["x: missing"]
+    block = followup_block({"release": 15, "lock_status": "locked", "confirmation_status": "locked (C1, C2, C3)", "inventory": lines,
+                            "two_way": [{"test": "H2a", "lr": 1.07, "two_way_ci_low": 0.7, "two_way_p": 0.3}],
+                            "pending": ["basis B"], "run": {}})
+    assert "confirmation plan locked (C1, C2, C3)" in block and "YEARS     test H2a · lr 1.07" in block
+    assert "ROUND 2   still to compute: basis B" in block and "DRIVE     TABLES" in block
+    assert "DRIVE     FOLDERS" in followup_block({"release": 15, "problems": ["x"], "inventory": lines, "run": {}})     # also when stopped

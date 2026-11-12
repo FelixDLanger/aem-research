@@ -2,18 +2,20 @@
 
 Base rates for extreme multiples in US small caps, and whether the AEM screening signals carry information. Empirical code for the AEM paper (Paper B) and, from the same data layer, the take-private sample for Paper A on regime-conditional value creation in buyouts.
 
-[Open notebook 01 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
-[Open notebook 02 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
-[Open notebook 03 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
-[Open notebook 04 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/04_results.ipynb) – the results, after the lock: outcomes and H1 from the notebook-01 run the lock names (a few minutes)
+[Open notebook 01 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
+[Open notebook 02 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
+[Open notebook 03 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/03_universe_a_diagnostic.ipynb) – why universe A is the size it is (reads notebook 01's caches; counts only, about two minutes)
+[Open notebook 04 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/04_results.ipynb) – the results, after the lock: outcomes and H1 from the notebook-01 run the lock names (a few minutes)
 
-[Open notebook 05 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/05_paper_a_results.ipynb) – Paper A's results, after its lock: the three confirmatory tests and every exploratory table, from the notebook-02 run the lock names (a few minutes)
+[Open notebook 05 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/05_paper_a_results.ipynb) – Paper A's results, after its lock: the three confirmatory tests and every exploratory table, from the notebook-02 run the lock names (a few minutes)
 
-[Open notebook 06 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/06_explore.ipynb) – exploration across both papers, after both locks: the premium split by year, margins, own price history, AEM signals of targets, public holders' outcomes in buyouts, the exit slowdown, sponsor styles, public against private (about a minute; everything exploratory)
+[Open notebook 06 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/06_explore.ipynb) – exploration across both papers, after both locks: the premium split by year, margins, own price history, AEM signals of targets, public holders' outcomes in buyouts, the exit slowdown, sponsor styles, public against private (about a minute; everything exploratory)
 
-[Open notebook 07 · v14 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/07_estimates.ipynb) – Paper B's H2 to H6, after the lock and notebook 04: the fallen-quality cohort, the horizon conversion, each signal's likelihood ratio out of sample, the 10x model against the checklist, with firm-cluster intervals (a minute or two)
+[Open notebook 07 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/07_estimates.ipynb) – Paper B's H2 to H6, after the lock and notebook 04: the fallen-quality cohort, the horizon conversion, each signal's likelihood ratio out of sample, the 10x model against the checklist, with firm-cluster intervals (a minute or two)
 
-The version (v14) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
+[Open notebook 08 · v15 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/08_followup.ipynb) – follow-up, round one: the robustness versions the saved tables allow and an inventory of the Drive for round two (the confirmation of C1 to C3 on new start dates, basis B, the calibration, Paper A's exit values); about five minutes
+
+The version (v15) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
 
 ## Design at a glance (pre-registration v0.3, draft)
 

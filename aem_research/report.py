@@ -539,3 +539,32 @@ def estimates_block(report: dict) -> str:
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up, round one (notebook 08)
+# ---------------------------------------------------------------------------
+
+def followup_block(report: dict) -> str:
+    """Notebook 08's paste block: the robustness versions computed from the saved tables, the
+    state of the confirmation plan, and the inventory of the Drive for the next round."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lines = [f"AEM FOLLOW-UP {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · Paper B {r.get('lock_status', '')} · confirmation plan "
+             f"{r.get('confirmation_status', '')}"]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("lock ok · data run ok · gates all passed in the data run" if not problems
+                                 else "STOPPED – " + " | ".join(problems)))
+    for label, key in (("YEARS     ", "two_way"), ("UNIVERSE  ", "universes"), ("BASE RATE ", "base_rates"),
+                       ("NASDAQ-30 ", "nasdaq"), ("SPLITS    ", "weak_splits")):
+        for row in r.get(key) or []:
+            lines.append(label + _kv(row))
+    if r.get("pending"):
+        lines.append("ROUND 2   still to compute: " + "; ".join(r["pending"]))
+    for line in r.get("inventory") or []:
+        lines.append("DRIVE     " + line)
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)

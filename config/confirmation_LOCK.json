@@ -1,0 +1,15 @@
+{
+  "schema": "aem-prereg-lock/1",
+  "current": {
+    "config_sha256": "6767983b45a6784805fa6258b94513344c2b0ac5eb49b78f0137560789053295",
+    "config_file": "confirmation.yaml",
+    "locked_at_utc": "2026-11-11T16:26:41Z",
+    "hypotheses": [
+      "C1",
+      "C2",
+      "C3"
+    ],
+    "note": "Locked by Claude on Felix's instruction of Nov 11, 2026 (notebook 8 with the three Cs). No outcome of any start date after July 2023 had been computed when this was locked; the features of the new dates had not been built."
+  },
+  "history": []
+}
