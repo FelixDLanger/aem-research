@@ -193,7 +193,7 @@ def test_estimates_notebook_runs_only_after_the_lock_and_its_gates_and_reads_no_
     assert "SecClient" not in joined and "sec_panel" not in joined and "compute_outcomes" not in joined
 
 
-def test_followup_notebook_takes_its_inventory_even_when_stopped_and_computes_no_new_start_date():
+def test_followup_notebook_takes_its_inventory_even_when_stopped_and_gates_the_new_outcomes():
     nb = json.loads(NOTEBOOK_F.read_text(encoding="utf-8"))
     codes = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
     for i, src in enumerate(codes):
@@ -201,10 +201,16 @@ def test_followup_notebook_takes_its_inventory_even_when_stopped_and_computes_no
         compile(src, f"cell-{i}", "exec")
     inv = next(i for i, src in enumerate(codes) if "followup.inventory(" in src)
     rob = next(i for i, src in enumerate(codes) if "est.two_way_table(" in src)
-    assert inv < rob and "if not problems" not in codes[inv] and "if not problems:" in codes[rob]
+    reb = next(i for i, src in enumerate(codes) if "confirm.reproduction(" in src)
+    new = next(i for i, src in enumerate(codes) if "confirm.new_outcomes(" in src)
+    assert inv < rob < reb < new and "if not problems" not in codes[inv] and "if not problems:" in codes[rob]
+    assert "if FEATS_NEW is not None and not confirm_problems:" in codes[new]          # no new outcome unless the rebuild reproduced
+    assert "confirm.new_outcomes(" not in "".join(codes[:new])
     joined = "\n".join(codes)
-    assert "confirmation_LOCK.json" in joined and "SecClient" not in joined
-    assert "2024" not in codes[rob].replace("2024-2025", "")               # the new start dates are round two, under the locked plan
+    assert "confirmation_LOCK.json" in joined and "SecClient" not in joined and "client=" not in joined
+    # nothing the data run saved is written again: every table round two saves has its own name
+    saved = re.findall(r"save_table\([^,]+, paths\.(?:cache|output) / (?:\"paper_a\" / )?\"([a-z_0-9]+)\"\)", joined)
+    assert sorted(saved) == ["bench_through_2025", "features_confirm", "outcomes_b_followup", "outcomes_confirm"], saved
 
 
 def test_the_confirmation_plan_is_locked_with_three_hypotheses_and_explicit_dates():

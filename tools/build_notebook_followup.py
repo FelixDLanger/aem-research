@@ -3,11 +3,14 @@
 The notebook is generated – edit the cells here, then run:
     python tools/build_notebook_followup.py notebooks/08_followup.ipynb
 
-Round one of the follow-up: the pre-registered robustness versions that the saved tables
-allow (start years resampled with firms, a US$50m floor, no minimum price, Nasdaq delistings
-at -30%, without windows crossing weak-evidence splits), and an inventory of the Drive that
-the next round (new start dates for the confirmation, basis B, the calibration, Paper A's
-exit values) is built against. No download.
+Round one: the pre-registered robustness versions that the saved tables allow (start years
+resampled with firms, a US$50m floor, no minimum price, Nasdaq delistings at -30%, without
+windows crossing weak-evidence splits) and an inventory of the Drive. Round two, built
+against that inventory: the data run's features rebuilt from the caches for the locked and
+the new start dates (the locked dates must reproduce the saved table), the confirmation
+tests C1 to C3 on the new dates, the purchases-only insider classification, multiples in
+real terms, basis B with the quarter-end against daily calibration, and Paper A's benchmark
+through 2025. No download.
 """
 import json
 import sys
@@ -27,14 +30,16 @@ def code(text):
 
 
 md("""
-# AEM – 08 follow-up, round one · v__RELEASE__
+# AEM – 08 follow-up, rounds one and two · v__RELEASE__
 
 **Version v__RELEASE__.** The paste block's first line repeats it; an older open copy stops at setup and names the current version.
 
-**What this does.** Two things, from the tables already on Drive (nothing is downloaded, about five minutes).
+**What this does.** Everything comes from the files already on Drive – nothing is downloaded, and nothing the data run saved is overwritten (new tables get their own names). About 20 to 40 minutes; the first cells are quick.
 
-1. **Pre-registered robustness that needs no rebuilt panel:** the likelihood-ratio intervals with start years resampled as well as firms; the universe from US$50m; the universe without the minimum price; Nasdaq performance delistings at -30%; the results without windows that cross a weak-evidence split.
-2. **An inventory of the Drive** – every folder, every saved table with its columns and date ranges – so that round two is written against what is actually there: the new start dates for the confirmation (C1 to C3, locked in `config/confirmation.yaml`), basis B, the quarter-end against daily calibration, multiples in real terms, the purchases-only insider classification, and Paper A's exit values.
+1. **Round one (as in v15):** the robustness versions the saved tables allow, and the inventory of the Drive.
+2. **Rebuild and check:** the data run's features are rebuilt from the caches for the locked start dates and seven new ones (January 2024 to July 2025). The rebuilt rows of the locked dates must match the saved table (99.5% on the universe and on every signal); if they do not, the block says where and no new outcome is computed.
+3. **Confirmation (C1 to C3, locked in `config/confirmation.yaml`):** one- and two-year outcomes of the new start dates, then the three tests with Holm, and the plan's robustness versions.
+4. **Leftovers:** the insider classification on purchases only; five-year multiples in real terms; basis B (daily vendor closes) with the quarter-end against daily calibration; Paper A's public benchmark through 2025.
 
 Each step runs on its own: one that fails is reported in the block and the others still finish.
 
@@ -82,7 +87,7 @@ import numpy as np
 import pandas as pd
 import aem_research
 from aem_research import estimators as est
-from aem_research import followup, outcomes
+from aem_research import confirm, followup, outcomes
 from aem_research.config import data_run_problems, load_config
 from aem_research.env import resolve_paths
 from aem_research.export import write_workbook
@@ -152,7 +157,7 @@ with LOG.phase("inventory"):
 
 code("""
 # ── Robustness from the saved tables ──
-BOOK = {}
+BOOK, W = {}, None
 if not problems:
     boot = cfg.get("estimation.bootstrap")
     kw = {"resamples": min(int(boot["resamples"]), 1000), "seed": int(boot["seed"])}
@@ -218,14 +223,152 @@ if not problems:
             row = est.headline(W[~crossed], "without windows crossing a weak-evidence split", **kw)
             BOOK["Weak splits"] = pd.DataFrame([primary, {**row, "windows_excluded": int(crossed.sum())}])
             REPORT["weak_splits"] = rec(BOOK["Weak splits"])
-    REPORT["pending"] = ["new start dates Oct 2023 to Jul 2025 with the confirmation tests C1 to C3", "basis B (daily vendor closes)",
-                         "quarter-end against daily calibration", "multiples in real terms", "insider classification on purchases only",
-                         "Paper A: the benchmark for 2024-2025, exit values, WSIB reports before March 2023"]
+else:
+    LOG.skipped("robustness", "checks failed")
+""")
+
+code("""
+# ── Round two · rebuild the features from the caches and check them against the data run ──
+import gc
+INP, SH, FEATS_ALL, FEATS_NEW, REPRO = None, None, None, None, None
+confirm_problems = []
+for _n in ("o30", "w30", "wv", "fv", "new", "extra"):              # round one's working tables
+    globals().pop(_n, None)
+gc.collect()
+if not problems and W is not None:
+    if not cfg_c.locked:
+        confirm_problems.append(f"the confirmation plan is not locked (status {cfg_c.status})")
+    K_RUN, ATT = (RUN.get("sec_check") or {}).get("liquidity_k"), (RUN.get("features") or {}).get("attention_signal")
+    if K_RUN is None or ATT is None:
+        confirm_problems.append("the data run's report lacks the liquidity threshold or the attention signal")
+    with LOG.phase("load caches"):
+        INP = confirm.load_inputs(paths, cfg, log=lambda *a, **k: None)
+        REPORT["rebuild_files"] = INP["files"]
+        print(INP["files"])
+    if INP is not None and not confirm_problems:
+        with LOG.phase("rebuild features"):
+            DATES = confirm.all_dates(cfg, cfg_c)
+            FEATS_ALL, SH = confirm.build_features(INP, cfg, SEC_PANEL, DATES, k=K_RUN, attention=ATT)
+            NEW_DATES = [pd.Timestamp(d) for d in cfg_c.get("dates.one_year")]
+            print(f"{len(FEATS_ALL):,} rows on {FEATS_ALL['start_date'].nunique()} start dates · SEC panel as of {SH['sec_as_of'].date()} · "
+                  f"vendor panel as of {SH['as_of'].date()}")
+            REPORT["rebuild"] = {"start_dates": int(FEATS_ALL["start_date"].nunique()), "sec_as_of": str(SH["sec_as_of"].date()),
+                                 "vendor_as_of": str(SH["as_of"].date()), "vendor_dates": len(SH["form_v"])}
+            INP["simfin"] = INP["stq"] = INP["eod_prices"] = None      # the vendor panel is built; free the source tables
+            gc.collect()
+        if FEATS_ALL is not None:
+            with LOG.phase("reproduction"):
+                REPRO = confirm.reproduction(FEATS_ALL, FEATURES)
+                REPRO["as_of_matches"] = bool(SH["sec_as_of"] == as_of)
+                REPRO["k"] = K_RUN
+                REPORT["reproduction"] = REPRO
+                show(pd.Series(REPRO, name="rebuilt against saved"))
+                if not REPRO["passed"]:
+                    confirm_problems.append(f"the rebuilt features do not reproduce the data run (universe {REPRO['universe_agreement']:.2%}, "
+                                            f"weakest signal {REPRO['weakest_agreement']:.2%}; needed {confirm.MIN_AGREEMENT:.1%})")
+                if not REPRO["as_of_matches"]:
+                    confirm_problems.append(f"the 13F data on Drive now end {SH['sec_as_of'].date()}, the data run's panel {as_of.date()}")
+                FEATS_NEW = FEATS_ALL[FEATS_ALL["start_date"].isin(NEW_DATES)]
+                missing_dates = sorted(set(NEW_DATES) - set(FEATS_NEW.loc[FEATS_NEW["in_universe"].fillna(False).astype(bool), "start_date"]))
+                if missing_dates:
+                    confirm_problems.append("no universe window on " + ", ".join(str(d.date()) for d in missing_dates))
+    REPORT["confirm_problems"] = confirm_problems
+    for p_ in confirm_problems:
+        print("Round two stops before the new outcomes:", p_)
+else:
+    LOG.skipped("round two", "checks failed or round one's inputs are missing")
+""")
+
+code("""
+# ── Round two · Paper A's benchmark through 2025 and the purchases-only classification (no new outcome) ──
+if FEATS_ALL is not None and REPRO is not None and REPRO["passed"]:
+    with LOG.phase("Paper A benchmark"):
+        from aem_research import paper_a_explore as pax, takeprivate as tp
+        cfg_a = load_config(os.path.join(REPO_DIR, "config", "paper_a.yaml"), os.path.join(REPO_DIR, "config", "paper_a_LOCK.json"))
+        bench = tp.benchmark(FEATS_ALL, INP["facts"], INP["subs"], current_months=cfg_a.get("sample.current_filer_months", 15))
+        save_table(bench, paths.cache / "paper_a" / "bench_through_2025")
+        BOOK["Benchmark by year"] = pax.benchmark_path(bench)
+        REPORT["benchmark"] = rec(BOOK["Benchmark by year"])
+        show(BOOK["Benchmark by year"])
+    with LOG.phase("purchases only"):
+        feats_p, _ = confirm.build_features(INP, cfg, SEC_PANEL, DATES, k=K_RUN, attention=ATT, purchases_only=True, shared=SH)
+        wp = est.windows(feats_p[feats_p["start_date"].isin(set(pd.to_datetime(FEATURES["start_date"])))], OUTCOMES)
+        rows = []
+        for name, ww in (("primary (purchases and sales classify an insider)", W), ("purchases only", wp)):
+            r2 = est.h2(ww, **kw)
+            opp = est._flag(ww["insider_opportunistic"]).eq(1)
+            rows.append({**est.headline(ww, name, **kw), "h2b_windows": r2["main"]["H2b"]["with_signal"],
+                         "h2b_ci_low": r2["main"]["H2b"]["ci_low"], "h2b_ci_high": r2["main"]["H2b"]["ci_high"],
+                         "opportunistic_windows": int(opp.sum())})
+        BOOK["Purchases only"] = pd.DataFrame(rows)
+        REPORT["purchases_only"] = rec(BOOK["Purchases only"])
+        del feats_p
+    INP["facts"] = INP["ins_tx"] = INP["f13_breadth"] = None   # the largest tables, not needed again
+    for _k in ("fund", "pf_sec", "breadth"):
+        SH.pop(_k, None)
+    gc.collect()
+""")
+
+code("""
+# ── Round two · the confirmation: outcomes of the new start dates, then C1 to C3 ──
+if FEATS_NEW is not None and not confirm_problems:
+    WC = None
+    with LOG.phase("confirmation outcomes"):
+        save_table(FEATS_NEW, paths.cache / "features_confirm")
+        OUT_C = confirm.new_outcomes(cfg, SEC_PANEL, FEATS_NEW, DELIST, SH["sec_as_of"], sec_gap=gap["max_gap_days"])
+        save_table(OUT_C, paths.output / "outcomes_confirm")
+        WC = confirm.windows(FEATS_NEW, OUT_C)
+        print(OUT_C.groupby(["horizon_years", "status"]).size().to_string())
+    if WC is not None:
+        with LOG.phase("C1 to C3"):
+            RES_C = confirm.tests(WC, cfg_c, resamples=int(boot["resamples"]), seed=int(boot["seed"]))
+            REPORT["confirmation"] = {k_: RES_C[k_] for k_ in ("C1", "C2", "C3")}
+            REPORT["confirmation_robustness"] = RES_C["robustness"]
+            REPORT["confirmation_dates"] = rec(RES_C["by_date"])
+            BOOK["Confirmation"] = pd.DataFrame([{"hypothesis": k_, **RES_C[k_]} for k_ in ("C1", "C2", "C3")])
+            BOOK["Confirmation robustness"] = pd.DataFrame(RES_C["robustness"])
+            BOOK["Confirmation dates"] = RES_C["by_date"]
+            show(BOOK["Confirmation"])
+elif not problems:
+    LOG.skipped("confirmation", "round two's checks failed" if confirm_problems else "no rebuilt features")
+""")
+
+code("""
+# ── Round two · multiples in real terms; basis B and the quarter-end against daily calibration ──
+if not problems and W is not None:
+    with LOG.phase("real terms"):
+        from aem_research.data import fred
+        series, _ = fred.load(paths.cache / "fred", offline=True, manual_dir=paths.work / "data" / "fred", log=lambda *a, **k: None)
+        if series.get("cpi_nsa") is None or not len(series["cpi_nsa"]):
+            raise FileNotFoundError("the CPI series (CPIAUCNS) is not in the FRED cache on Drive")
+        BOOK["Real terms"] = confirm.real_terms(W, series["cpi_nsa"])
+        REPORT["real_terms"] = rec(BOOK["Real terms"])
+        show(BOOK["Real terms"])
+    if SH is not None:
+        with LOG.phase("basis B"):
+            FB, DV, DB = (load_table(paths.cache / n) for n in ("features_b", "delistings_vendor", "delistings_b"))
+            EVENTS = load_table(paths.cache / "sec_splits")
+            if FB is None or DV is None or DB is None or not len(FB):
+                raise FileNotFoundError("features_b or its delistings are not on Drive")
+            OUT_B, CALIB = confirm.basis_b(cfg, SH["panel"], SH["as_of"], FB, DV, DB, SEC_PANEL, EVENTS, paths.sec_dir, SH["bridge"],
+                                           sec_gap=gap["max_gap_days"])
+            save_table(OUT_B, paths.output / "outcomes_b_followup")
+            wb_ = est.windows(FB.assign(in_universe=True), OUT_B)
+            b0 = pd.to_datetime(FB["start_date"]).min()
+            wa_ = W[W["start_date"] >= b0]
+            BOOK["Basis B"] = pd.DataFrame([est.headline(wa_, f"A from {b0.date()}", **kw), est.headline(wb_, "B (daily vendor closes)", **kw)])
+            BOOK["Basis B base rates"] = pd.DataFrame([confirm.base_rate_row(f"A from {b0.date()}", wa_),
+                                                       confirm.base_rate_row("B (daily vendor closes)", wb_)])
+            BOOK["Calibration"] = CALIB
+            REPORT["basis_b"], REPORT["basis_b_rates"], REPORT["calibration"] = (rec(BOOK["Basis B"]), rec(BOOK["Basis B base rates"]),
+                                                                                 rec(CALIB))
+            show(BOOK["Basis B base rates"])
+            show(CALIB)
+    REPORT["pending"] = ["Paper A: exit values (a document extraction that needs its own reading check)",
+                         "Paper A: WSIB reports before March 2023 (a download)"]
     if BOOK:
         with LOG.phase("save"):
             write_workbook(paths.output / "aem_followup.xlsx", {k: v for k, v in BOOK.items() if len(v)})
-else:
-    LOG.skipped("robustness", "checks failed")
 """)
 
 code("""

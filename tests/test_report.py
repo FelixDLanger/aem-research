@@ -126,5 +126,17 @@ def test_the_drive_inventory_describes_folders_and_tables_and_survives_a_broken_
                             "two_way": [{"test": "H2a", "lr": 1.07, "two_way_ci_low": 0.7, "two_way_p": 0.3}],
                             "pending": ["basis B"], "run": {}})
     assert "confirmation plan locked (C1, C2, C3)" in block and "YEARS     test H2a · lr 1.07" in block
-    assert "ROUND 2   still to compute: basis B" in block and "DRIVE     TABLES" in block
+    assert "OPEN      still to compute: basis B" in block and "DRIVE     TABLES" in block
+    block = followup_block({"release": 16, "inventory": [], "run": {}, "rebuild_files": {"fsds": "63 files, 63 cached, 0 missing, 0 bad"},
+                            "reproduction": {"dates_compared": 42, "universe_saved": 58652, "universe_agreement": 0.99873,
+                                             "same_fcf_pos": 1.0, "weakest_agreement": 0.99873, "passed": True, "as_of_matches": False},
+                            "confirm_problems": ["the 13F data on Drive now end 2026-10-01"],
+                            "confirmation": {"C2": {"windows": 5200, "lr": 1.31, "p_one_sided": 0.004, "holm_p": 0.012, "verdict": "confirmed"}},
+                            "confirmation_dates": [{"start_date": "2024-07-01", "windows": 1400}]})
+    assert "CACHES    fsds: 63 files, 63 cached, 0 missing, 0 bad" in block
+    assert ("REBUILD   dates compared 42 · universe saved 58,652 · universe agreement 99.87% · same fcf pos 100.00% · "
+            "weakest agreement 99.87% · passed yes · as of matches NO") in block
+    assert "CONFIRM   STOPPED – the 13F data on Drive now end 2026-10-01" in block
+    assert "C2        windows 5,200 · lr 1.31 · " in block and "verdict confirmed" in block
+    assert "C DATES   start date 2024-07-01 · windows 1,400" in block
     assert "DRIVE     FOLDERS" in followup_block({"release": 15, "problems": ["x"], "inventory": lines, "run": {}})     # also when stopped

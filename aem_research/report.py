@@ -546,8 +546,8 @@ def estimates_block(report: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def followup_block(report: dict) -> str:
-    """Notebook 08's paste block: the robustness versions computed from the saved tables, the
-    state of the confirmation plan, and the inventory of the Drive for the next round."""
+    """Notebook 08's paste block: round one's robustness versions, round two's rebuild check,
+    the confirmation of C1 to C3, the leftovers, and the inventory of the Drive."""
     r = report
     v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
     lines = [f"AEM FOLLOW-UP {v_} – paste everything between the rulers into the chat", "=" * 72,
@@ -561,8 +561,32 @@ def followup_block(report: dict) -> str:
                        ("NASDAQ-30 ", "nasdaq"), ("SPLITS    ", "weak_splits")):
         for row in r.get(key) or []:
             lines.append(label + _kv(row))
+    if r.get("rebuild_files"):
+        lines.append("CACHES    " + " · ".join(f"{k}: {v}" for k, v in r["rebuild_files"].items()))
+    if r.get("rebuild"):
+        lines.append("REBUILT   " + " · ".join(f"{k.replace('_', ' ')} {v}" for k, v in r["rebuild"].items()))
+    if r.get("reproduction"):
+        rp = r["reproduction"]
+        cells = []
+        for k, v in rp.items():
+            if k == "passed" or k == "as_of_matches":
+                cells.append(f"{k.replace('_', ' ')} {'yes' if v else 'NO'}")
+            elif k.startswith("same_") or k.endswith("_agreement"):
+                cells.append(f"{k.replace('_', ' ')} {'n/a' if not _fin(v) else f'{float(v):.2%}'}")
+            else:
+                cells.append(f"{k.replace('_', ' ')} {int(v):,}")
+        lines.append("REBUILD   " + " · ".join(cells))
+    for p_ in r.get("confirm_problems") or []:
+        lines.append("CONFIRM   STOPPED – " + p_)
+    for name, row in (r.get("confirmation") or {}).items():
+        lines.append(f"{name:<10}" + _kv(row))
+    for label, key in (("C ROBUST  ", "confirmation_robustness"), ("C DATES   ", "confirmation_dates"),
+                       ("PURCHASES ", "purchases_only"), ("REAL      ", "real_terms"), ("BASIS B   ", "basis_b"),
+                       ("B RATES   ", "basis_b_rates"), ("CALIB     ", "calibration"), ("BENCH     ", "benchmark")):
+        for row in r.get(key) or []:
+            lines.append(label + _kv(row))
     if r.get("pending"):
-        lines.append("ROUND 2   still to compute: " + "; ".join(r["pending"]))
+        lines.append("OPEN      still to compute: " + "; ".join(r["pending"]))
     for line in r.get("inventory") or []:
         lines.append("DRIVE     " + line)
     lines += _run_lines(r)

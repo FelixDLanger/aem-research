@@ -1,4 +1,4 @@
-"""End-to-end check for notebooks 04 and 07 (H1, then H2 to H6, from the locked run). No network.
+"""End-to-end check for notebooks 04, 07 and 08 (H1, H2 to H6, the follow-up, from the locked run). No network.
 
     python tools/e2e_results.py <scratch_dir> <repo_dir>
 
@@ -133,13 +133,45 @@ print(fu_block)
 assert fu_block.startswith("AEM FOLLOW-UP v") and "confirmation plan locked (C1, C2, C3)" in fu_block and "ERRORS    none" in fu_block
 for label in ("YEARS     test H2a", "UNIVERSE  version primary", "UNIVERSE  version market cap from US$50m", "UNIVERSE  version no minimum price",
               "BASE RATE version primary", "NASDAQ-30 version primary (Nasdaq -55%)", "NASDAQ-30 version Nasdaq -30%",
-              "SPLITS    version without windows crossing a weak-evidence split", "ROUND 2   still to compute",
+              "SPLITS    version without windows crossing a weak-evidence split",
               "DRIVE     FOLDERS", "DRIVE     TABLES", "DRIVE     features: ", "DRIVE     sec_panel: ", "DRIVE     sec_splits evidence: "):
     assert label in fu_block, label
+for label in ("CACHES    fsds: ", "REBUILD   dates compared ", "universe agreement 100.00%", "weakest agreement 100.00%", "passed yes",
+              "as of matches yes", "C1        ", "C2        windows ", "C3        ", "C ROBUST  version one year · C2 (touch 1.5x)",
+              "C DATES   start date 2023-10-01", "C DATES   start date 2025-07-01", "PURCHASES version purchases only",
+              "REAL      group all", "BASIS B   version B (daily vendor closes)", "B RATES   version B (daily vendor closes)",
+              "CALIB     horizon years 3", "BENCH     year 2025", "OPEN      still to compute: Paper A: exit values"):
+    assert label in fu_block, label
+assert "CONFIRM   STOPPED" not in fu_block
 wb8 = pd.read_excel(OUTPUT / "aem_followup.xlsx", sheet_name=None, engine="openpyxl")
-assert {"Start years", "Universes", "Base rates", "Nasdaq -30%", "Weak splits"} <= set(wb8), set(wb8)
+assert {"Start years", "Universes", "Base rates", "Nasdaq -30%", "Weak splits", "Confirmation", "Confirmation robustness",
+        "Confirmation dates", "Purchases only", "Real terms", "Basis B", "Calibration", "Benchmark by year"} <= set(wb8), set(wb8)
+from aem_research.io_utils import load_table  # noqa: E402
+CACHE = DRIVE / "aem-research" / "cache"
+oc_ = load_table(OUTPUT / "outcomes_confirm")
+assert set(oc_["horizon_years"]) == {1, 2} and {"touch_1.5x", "touch_2x"} <= set(oc_.columns)
+assert pd.to_datetime(load_table(CACHE / "features_confirm")["start_date"]).min() == pd.Timestamp("2023-10-01")
+assert pd.to_datetime(load_table(CACHE / "features")["start_date"]).max() == pd.Timestamp("2023-10-01")      # the data run's table is untouched
+assert json.loads((OUTPUT / "coverage_report.json").read_text(encoding="utf-8"))["generated_utc"] == RUN["generated_utc"]
+# a Drive whose saved features differ from what the caches rebuild: the new outcomes stay closed
+drive_r = SCRATCH / "drive_repro"
+shutil.rmtree(drive_r, ignore_errors=True)
+shutil.copytree(DRIVE, drive_r)
+from aem_research.io_utils import save_table  # noqa: E402
+f_ = load_table(drive_r / "aem-research" / "cache" / "features")
+f_["fcf_pos"] = ~f_["fcf_pos"].fillna(False).astype(bool)
+for old_ in (drive_r / "aem-research" / "cache").glob("features.*"):
+    old_.unlink()
+save_table(f_, drive_r / "aem-research" / "cache" / "features")
+for n in ("outcomes_confirm", "features_confirm"):
+    for q in list((drive_r / "aem-research" / "output").glob(n + ".*")) + list((drive_r / "aem-research" / "cache").glob(n + ".*")):
+        q.unlink()
+bad = run_followup(SCRATCH / "repo_ok", drive_r)
+assert "CONFIRM   STOPPED – the rebuilt features do not reproduce the data run" in bad and "passed NO" in bad, bad[:3000]
+assert "C2        windows" not in bad and not list((drive_r / "aem-research" / "output").glob("outcomes_confirm.*"))
+assert "REAL      group all" in bad and "BASIS B   version B" in bad          # the steps that do not need the rebuilt table still ran
 stopped = run_followup(repo_copy("fu_unlocked", None), DRIVE)          # stopped, but the inventory is still there
-assert "CHECKS    STOPPED" in stopped and "DRIVE     TABLES" in stopped and "UNIVERSE  " not in stopped
+assert "CHECKS    STOPPED" in stopped and "DRIVE     TABLES" in stopped and "UNIVERSE  " not in stopped and "REBUILD" not in stopped
 
 # mismatch: another run of the same version
 block = run_notebook(repo_copy("mismatch", {**IDENTITY, "generated_utc": "2099-01-01 00:00 UTC"}), DRIVE)
