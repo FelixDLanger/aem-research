@@ -431,4 +431,36 @@ def last_checks(w_locked: pd.DataFrame | None, w_new: pd.DataFrame | None, *, re
             dates += [{"sample": label, **r} for r in bd.dropna(subset=["ratio"]).to_dict("records")]
         s = subsets(w, hit, bucket, **kw)
         subs += [{"sample": label, **r} for r in s.to_dict("records")]
-    return {"sides": sides, "dates": dates, "stratified": strat, "subsets": subs}
+    return {"sides": sides, "dates": dates, "stratified": strat, "subsets": subs, "after_touch": after_touch(w_locked)}
+
+
+def after_touch(w: pd.DataFrame | None) -> list[dict]:
+    """What a touch is worth without a selling rule: how long the first touch took, and where
+    the windows that touched 3x (10x) within five years stood at the end of the five years."""
+    if w is None or not len(w):
+        return []
+    rows = []
+    x = w[w["end5"].notna()] if "end5" in w.columns else w.iloc[0:0]
+    for name, hit, days, level in (("touched 3x within 5 years", "hit3_5y", None, 3.0), ("touched 10x within 5 years", "hit10_5y", "days10", 10.0)):
+        if hit not in x.columns:
+            continue
+        g = x[x[hit].eq(1)]
+        if not len(g):
+            continue
+        e, top = g["end5"].to_numpy(dtype=float), pd.to_numeric(g["max5"], errors="coerce").to_numpy(dtype=float)
+        row = {"group": name, "windows": int(len(g)), "firms": int(g["firm"].nunique()), "share_of_all_windows": float(len(g) / len(x)),
+               "share_ended_at_or_above_the_touch": float((e >= level).mean()), "share_ended_at_least_2x": float((e >= 2).mean()),
+               "share_ended_below_entry": float((e < 1).mean()), "median_end": float(np.median(e)),
+               "median_peak": float(np.nanmedian(top)), "median_end_over_peak": float(np.nanmedian(e / top))}
+        if days is not None and days in g.columns:
+            d = pd.to_numeric(g[days], errors="coerce").dropna() / 30.44
+            row.update(months_to_touch_p25=float(d.quantile(0.25)), months_to_touch_median=float(d.median()),
+                       months_to_touch_p75=float(d.quantile(0.75)))
+        rows.append(row)
+    if "days3" in w.columns and "hit3_3y" in w.columns:
+        d = pd.to_numeric(w.loc[w["hit3_3y"].eq(1), "days3"], errors="coerce").dropna() / 30.44
+        if len(d):
+            rows.append({"group": "first 3x touch within 3 years: months to the touch", "windows": int(len(d)),
+                         "months_to_touch_p25": float(d.quantile(0.25)), "months_to_touch_median": float(d.median()),
+                         "months_to_touch_p75": float(d.quantile(0.75)), "share_within_12_months": float((d <= 12).mean())})
+    return rows

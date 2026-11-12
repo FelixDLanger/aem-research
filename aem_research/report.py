@@ -455,7 +455,8 @@ def exits_block(report: dict) -> str:
     if r.get("last_inputs"):
         lines.append("B LAST    exploratory, from the saved tables · " + _items(r["last_inputs"]))
     last = r.get("last_checks") or {}
-    for label, key in (("B SIDES   ", "sides"), ("B DATES   ", "dates"), ("B WITHIN  ", "stratified"), ("B SUBSET  ", "subsets")):
+    for label, key in (("B SIDES   ", "sides"), ("B DATES   ", "dates"), ("B WITHIN  ", "stratified"), ("B SUBSET  ", "subsets"),
+                       ("B TOUCH   ", "after_touch")):
         for row in last.get(key) or []:
             lines.append(label + _kv(row))
     sc = r.get("scan") or {}

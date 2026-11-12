@@ -27,19 +27,25 @@ def w():
     f["firm"], f["start_year"] = f["cik"], f["start_date"].dt.year
     f["hit3_3y"] = (rng.random(n) < 0.05 + 0.10 * (f["revenue_growth"] > 0.3)).astype(float)       # one planted signal
     f["hit10_5y"] = (rng.random(n) < 0.012).astype(float)                                          # and a target with none
+    f["end5"] = np.exp(rng.normal(0.1, 0.8, n) - 0.9 * (f["fcf"] < -6e7))                         # losses planted among heavy cash-burners
     return f
 
 
 def test_the_scan_finds_the_planted_signal_on_both_periods_and_no_other(w):
     t = scan.scan(w, None, resamples=300)
-    assert set(t["target"]) == {"3x within 3 years", "10x within 5 years"} and t["discovery_p"].notna().sum() > 60
+    assert set(t["target"]) == {"3x within 3 years", "10x within 5 years", "ended 5 years below half"}
+    assert t["discovery_p"].notna().sum() > 90
     held = t[t["verdict"].str.startswith("held")]
     assert ("revenue_growth", "highest fifth") in set(zip(held["candidate"], held["side"]))
-    assert set(held["candidate"]) <= {"revenue_growth", "profitable_growth", "fallen_and_growing"}   # the signal and flags built on it
+    gains = held[held["target"].eq("3x within 3 years")]
+    assert set(gains["candidate"]) <= {"revenue_growth", "profitable_growth", "fallen_and_growing"}  # the signal and flags built on it
     assert not len(held[held["target"].eq("10x within 5 years")])                                # noise does not survive the two periods
+    losses = held[held["target"].eq("ended 5 years below half")]                                 # the mirror target finds the planted loss side
+    assert ("fcf_yield", "lowest fifth") in set(zip(losses["candidate"], losses["side"]))
+    assert losses.loc[losses["candidate"].eq("fcf_yield") & losses["side"].eq("lowest fifth"), "holdout_lr"].iloc[0] > 1.3
     assert (t["discovery_q"].dropna() >= t["discovery_p"].dropna() - 1e-12).all()
     d = scan.digest(t)
-    assert d["tested"] == t["discovery_p"].notna().sum() and len(d["held"]) == len(held) and len(d["strongest"]) == 24
+    assert d["tested"] == t["discovery_p"].notna().sum() and len(d["held"]) == len(held) and len(d["strongest"]) == 36
     assert scan.digest(None) == {"tested": 0, "held": [], "strongest": []}
 
 
@@ -64,3 +70,4 @@ def test_the_model_bound_scores_out_of_time_and_survives_an_empty_measure(w):
     none = m.loc[("10x within 5 years", "holdout (start dates from 2018)")]
     assert 0.4 < none["auc"] < 0.6                                                # and noise scores as noise
     assert m.loc[("3x within 3 years", "discovery (fitted here, flattering)"), "auc"] >= hold["auc"]
+    assert m.loc[("ended 5 years below half", "holdout (start dates from 2018)"), "auc"] > 0.55

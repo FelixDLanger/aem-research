@@ -172,7 +172,8 @@ assert "WSIB      reports asked " in block and "WSIB      missing: " in block an
 assert "B LAST    exploratory, from the saved tables · locked windows " in block and "new windows not on Drive" in block
 for label in ("B SIDES   split locked dates, five years · group with fallen", "B SIDES   split locked dates, five years · group without fcf_pos",
               "B WITHIN  sample locked dates, five years · signal fallen · hit 3x within three years",
-              "B SUBSET  sample locked dates, five years · subset without pharma and biotech"):
+              "B SUBSET  sample locked dates, five years · subset without pharma and biotech", "B TOUCH   group touched 3x within 5 years",
+              "B TOUCH   group first 3x touch within 3 years: months to the touch"):
     assert label in block, label
 assert "SCAN      exploratory · " in block and "candidate tests on start dates to 2017" in block and "MODEL     target " in block
 wb = pd.read_excel(OUTPUT / "paper_a_exits.xlsx", sheet_name=None, engine="openpyxl")

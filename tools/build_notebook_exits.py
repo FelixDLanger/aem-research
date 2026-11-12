@@ -34,8 +34,8 @@ md("""
 1. **Exit values.** For every completed deal that was later sold to a listed buyer, the buyer's 8-K and its press release are fetched from EDGAR (about 135 filings, a few minutes; texts are kept on Drive) and the stated price is read from the sentences around the target's name. The block prints the tables **and a seeded sample of 30 filings with the sentence each value came from**, which I read to measure the extraction's accuracy.
 2. **Value between entry and exit.** Exit value over entry enterprise value, years held, the annual rate – by entry regime, exit regime and buyer type – and whether value growth follows the public benchmark's multiple over the same span.
 3. **WSIB before March 2023.** The quarterly reports from 2016 on are requested again; the block names each one that is missing or could not be read, and extends the pace of distributions as far back as the reports go.
-5. **Paper B, signal scan (exploratory):** every other measure the feature table holds – size, price, depth of the fall, momentum, cash-flow yield and change, growth, cheapness on sales, cash and debt, share count, capital intensity, holders, turnover, insider selling, sector and a few combinations – measured on start dates to 2017, corrected for the number of candidates, and counted only if it holds on start dates from 2018; plus a flexible model on all of them, to bound what any combination could add.
-4. **Paper B, last checks (exploratory, from the saved tables):** the whole outcome distribution with and without the fall, positive free cash flow and low dilution (the loss side next to the gain side); the fall's ratio start date by start date and combined within start dates; both without pharma and biotech and by size half.
+5. **Paper B, signal scan (exploratory):** every other measure the feature table holds – size, price, depth of the fall, momentum, cash-flow yield and change, growth, cheapness on sales, cash and debt, share count, capital intensity, holders, turnover, insider selling, sector and a few combinations – measured on start dates to 2017, corrected for the number of candidates, and counted only if it holds on start dates from 2018 – for three targets: 3x within three years, 10x within five, and the mirror, ending five years below half; plus a flexible model on all of them, to bound what any combination could add.
+4. **Paper B, last checks (exploratory, from the saved tables):** the whole outcome distribution with and without the fall, positive free cash flow and low dilution (the loss side next to the gain side); the fall's ratio start date by start date and combined within start dates; both without pharma and biotech and by size half; how long a touch took and where the windows that touched 3x or 10x stood after five years.
 
 Needs the `SEC_USER_AGENT` secret (as notebook 02). Nothing the locked runs saved is overwritten. Each step runs on its own.
 
@@ -222,7 +222,7 @@ if not problems:
         LAST = confirm.last_checks(w_locked, w_new, resamples=min(int(boot["resamples"]), 1000), seed=int(boot["seed"]))
         REPORT["last_checks"] = LAST
         for name, key in (("B both sides", "sides"), ("B fall by date", "dates"), ("B fall within dates", "stratified"),
-                          ("B subsets", "subsets")):
+                          ("B subsets", "subsets"), ("B after a touch", "after_touch")):
             if LAST[key]:
                 BOOK[name] = pd.DataFrame(LAST[key])
                 show(BOOK[name])

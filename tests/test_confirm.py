@@ -132,4 +132,19 @@ def test_last_checks_show_both_sides_and_hold_the_ratio_within_start_dates(cfg_c
     assert sub.loc["all", "fcf_odds_ratio"] > 1
     out = confirm.last_checks(None, w, resamples=200)
     assert {r["split"] for r in out["sides"]} == {"new dates, two years"} and len(out["sides"]) == 6 and len(out["dates"]) == 4
-    assert out["stratified"][0]["hit"] == "2x within two years" and confirm.last_checks(None, None) == {"sides": [], "dates": [], "stratified": [], "subsets": []}
+    assert out["stratified"][0]["hit"] == "2x within two years" and confirm.last_checks(None, None) == {"sides": [], "dates": [], "stratified": [], "subsets": [], "after_touch": []}
+
+
+def test_after_a_touch_the_table_says_where_the_window_ended_and_how_long_the_touch_took():
+    w = pd.DataFrame({"firm": [1, 2, 3, 4, 5, 6], "end5": [4.0, 1.5, 0.8, 12.0, 1.0, np.nan], "max5": [5.0, 3.5, 3.0, 15.0, 1.2, 9.0],
+                      "hit3_5y": [1, 1, 1, 1, 0, 1.0], "hit10_5y": [0, 0, 0, 1, 0, 0.0], "days10": [np.nan, np.nan, np.nan, 913.2, np.nan, np.nan],
+                      "hit3_3y": [1, 0, 1, 1, 0, 1.0], "days3": [304.4, np.nan, 608.8, 365.28, np.nan, 91.32]})
+    rows = {r["group"]: r for r in confirm.after_touch(w)}
+    t3 = rows["touched 3x within 5 years"]
+    assert t3["windows"] == 4 and t3["share_of_all_windows"] == pytest.approx(0.8) and t3["share_ended_at_or_above_the_touch"] == 0.5
+    assert t3["share_ended_below_entry"] == 0.25 and t3["median_end"] == pytest.approx(2.75) and t3["median_end_over_peak"] == pytest.approx((1.5 / 3.5 + 0.8) / 2)
+    t10 = rows["touched 10x within 5 years"]
+    assert t10["windows"] == 1 and t10["months_to_touch_median"] == pytest.approx(30.0)
+    first = rows["first 3x touch within 3 years: months to the touch"]
+    assert first["windows"] == 4 and first["months_to_touch_median"] == pytest.approx(11.0) and first["share_within_12_months"] == 0.75
+    assert confirm.after_touch(None) == []

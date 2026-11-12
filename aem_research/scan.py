@@ -4,7 +4,8 @@ The study tested the signals AEM named. This asks the other question: is there a
 10x signal in the data that nobody named? Run on one sample, such a search finds patterns
 by chance, so it is split in time: every candidate is measured on the start dates to 2017
 (discovery), corrected for the number of candidates (Benjamini-Hochberg), and counted only
-if it shows the same direction on the start dates from 2018 (holdout). The start dates
+if it shows the same direction on the start dates from 2018 (holdout). Three targets: 3x
+within three years, 10x within five, and the mirror – the window ended below half. The start dates
 after the locked sample (two-year outcomes) are a third look. A flexible model on all
 features, fitted on discovery and scored on holdout, bounds what any combination could add.
 
@@ -79,7 +80,16 @@ def candidates(w: pd.DataFrame, panel: pd.DataFrame | None = None) -> pd.DataFra
     x["shrinking_share_count"] = (shares < -0.02).astype(float).where(shares.notna())
     for c in ("sale_any", "insider_routine_only"):
         x[c] = est._flag(x[c]) if c in x.columns else np.nan
+    # the mirror target: the window ended below half its entry value (five years; two on the new dates)
+    for end, loss in (("end5", "loss5"), ("end2", "loss2")):
+        if end in x.columns:
+            e = _num(x, end)
+            x[loss] = (e < 0.5).astype(float).where(e.notna())
     return x
+
+
+TARGETS = (("3x within 3 years", "hit3_3y", "hit2_2y"), ("10x within 5 years", "hit10_5y", None),
+           ("ended 5 years below half", "loss5", "loss2"))
 
 
 def _quintile_flags(x: pd.DataFrame, col: str) -> tuple[pd.Series, pd.Series]:
@@ -127,13 +137,15 @@ def scan(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, resa
         if c in x.columns and x[c].notna().any():
             sides.append((c, "flag", x[c], xn[c] if xn is not None and c in xn.columns else None))
     rows = []
-    for target, hit in (("3x within 3 years", "hit3_3y"), ("10x within 5 years", "hit10_5y")):
+    for target, hit, hit_new in TARGETS:
+        if hit not in x.columns:
+            continue
         for name, side, sig, sig_new in sides:
             d, h = _lr(disc, sig, hit, resamples, seed), _lr(hold, sig, hit, resamples, seed)
             row = {"target": target, "candidate": name, "side": side, "discovery_windows": d["with"], "discovery_lr": d["lr"],
                    "discovery_p": d["p"], "holdout_windows": h["with"], "holdout_lr": h["lr"], "holdout_p": h["p"]}
-            if xn is not None and sig_new is not None and target.startswith("3x"):
-                n = _lr(xn, sig_new, "hit2_2y", resamples, seed)
+            if xn is not None and sig_new is not None and hit_new is not None and hit_new in xn.columns:
+                n = _lr(xn, sig_new, hit_new, resamples, seed)
                 row.update(new_dates_windows=n["with"], new_dates_lr=n["lr"], new_dates_p=n["p"])
             rows.append(row)
     t = pd.DataFrame(rows)
@@ -179,7 +191,9 @@ def model_bound(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=Non
         return {"windows": int(len(y)), "base_rate": float(y.mean()), "auc": float(roc_auc_score(y, p)),
                 "top_decile_hit_rate": float(y[top].mean()), "top_decile_lift": float(y[top].mean() / y.mean())}
     rows = []
-    for target, hit in (("3x within 3 years", "hit3_3y"), ("10x within 5 years", "hit10_5y")):
+    for target, hit, hit_new in TARGETS:
+        if hit not in x.columns:
+            continue
         d = x[(x["start_year"] <= DISCOVERY_TO) & x[hit].notna()]
         h = x[(x["start_year"] > DISCOVERY_TO) & x[hit].notna()]
         if len(d) < 1000 or d[hit].sum() < 30 or not len(h):
@@ -193,11 +207,11 @@ def model_bound(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=Non
         model.fit(md[use].to_numpy(dtype=float), d[hit].to_numpy(dtype=int))
         rows.append({"target": target, "sample": "discovery (fitted here, flattering)", "measures": len(use), **score(d[hit], prob(d))})
         rows.append({"target": target, "sample": "holdout (start dates from 2018)", "measures": len(use), **score(h[hit], prob(h))})
-        if xn is not None and target.startswith("3x") and "hit2_2y" in xn.columns:
-            n = xn[xn["hit2_2y"].notna()]
+        if xn is not None and hit_new is not None and hit_new in xn.columns:
+            n = xn[xn[hit_new].notna()]
             if len(n):
-                rows.append({"target": "2x within 2 years, scored by the 3x model", "sample": "new dates", "measures": len(use),
-                             **score(n["hit2_2y"], prob(n))})
+                rows.append({"target": f"{target}: the same model on the two-year outcome", "sample": "new dates", "measures": len(use),
+                             **score(n[hit_new], prob(n))})
     return pd.DataFrame(rows)
 
 
