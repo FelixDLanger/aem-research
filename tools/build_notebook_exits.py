@@ -34,6 +34,7 @@ md("""
 1. **Exit values.** For every completed deal that was later sold to a listed buyer, the buyer's 8-K and its press release are fetched from EDGAR (about 135 filings, a few minutes; texts are kept on Drive) and the stated price is read from the sentences around the target's name. The block prints the tables **and a seeded sample of 30 filings with the sentence each value came from**, which I read to measure the extraction's accuracy.
 2. **Value between entry and exit.** Exit value over entry enterprise value, years held, the annual rate – by entry regime, exit regime and buyer type – and whether value growth follows the public benchmark's multiple over the same span.
 3. **WSIB before March 2023.** The quarterly reports from 2016 on are requested again; the block names each one that is missing or could not be read, and extends the pace of distributions as far back as the reports go.
+5. **Paper B, signal scan (exploratory):** every other measure the feature table holds – size, price, depth of the fall, momentum, cash-flow yield and change, growth, cheapness on sales, cash and debt, share count, capital intensity, holders, turnover, insider selling, sector and a few combinations – measured on start dates to 2017, corrected for the number of candidates, and counted only if it holds on start dates from 2018; plus a flexible model on all of them, to bound what any combination could add.
 4. **Paper B, last checks (exploratory, from the saved tables):** the whole outcome distribution with and without the fall, positive free cash flow and low dilution (the loss side next to the gain side); the fall's ratio start date by start date and combined within start dates; both without pharma and biotech and by size half.
 
 Needs the `SEC_USER_AGENT` secret (as notebook 02). Nothing the locked runs saved is overwritten. Each step runs on its own.
@@ -208,6 +209,7 @@ if not problems:
 code("""
 # ── Paper B · last checks before the papers, from the tables on Drive (exploratory) ──
 if not problems:
+    w_locked = w_new = None
     with LOG.phase("Paper B last checks"):
         from aem_research import confirm, estimators as est
         boot = cfg_b.get("estimation.bootstrap")
@@ -224,6 +226,22 @@ if not problems:
             if LAST[key]:
                 BOOK[name] = pd.DataFrame(LAST[key])
                 show(BOOK[name])
+    if w_locked is not None:
+        with LOG.phase("signal scan"):
+            from aem_research import scan
+            PANEL = load_table(paths.cache / "sec_panel")
+            SCAN = scan.scan(w_locked, w_new, panel=PANEL, resamples=500, seed=int(boot["seed"]))
+            BOOK["B signal scan"] = SCAN
+            REPORT["scan"] = json.loads(json.dumps(scan.digest(SCAN), default=float))
+            show(SCAN[SCAN["verdict"] != ""])
+        with LOG.phase("model bound"):
+            try:
+                import sklearn  # noqa: F401
+            except ImportError:
+                subprocess.run([sys.executable, "-m", "pip", "install", "-q", "scikit-learn"], check=True)
+            BOOK["B model bound"] = scan.model_bound(w_locked, w_new, panel=PANEL, seed=int(boot["seed"]))
+            REPORT["model_bound"] = rec(BOOK["B model bound"])
+            show(BOOK["B model bound"])
     if BOOK:
         with LOG.phase("save"):
             write_workbook(paths.output / "paper_a_exits.xlsx", {k: v for k, v in BOOK.items() if len(v)})

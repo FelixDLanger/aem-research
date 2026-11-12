@@ -458,6 +458,17 @@ def exits_block(report: dict) -> str:
     for label, key in (("B SIDES   ", "sides"), ("B DATES   ", "dates"), ("B WITHIN  ", "stratified"), ("B SUBSET  ", "subsets")):
         for row in last.get(key) or []:
             lines.append(label + _kv(row))
+    sc = r.get("scan") or {}
+    if sc:
+        lines.append(f"SCAN      exploratory · {sc.get('tested', 0)} candidate tests on start dates to 2017 · "
+                     f"{sc.get('discovery_significant', 0)} pass the false-discovery correction · {len(sc.get('held') or [])} "
+                     "also hold on start dates from 2018")
+        for row in sc.get("held") or []:
+            lines.append("SCAN HELD " + _kv(row))
+        for row in sc.get("strongest") or []:
+            lines.append("SCAN TOP  " + _kv(row))
+    for row in r.get("model_bound") or []:
+        lines.append("MODEL     " + _kv(row))
     lines += _run_lines(r)
     lines.append("=" * 72)
     return "\n".join(lines)
