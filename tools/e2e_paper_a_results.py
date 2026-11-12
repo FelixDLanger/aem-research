@@ -1,4 +1,4 @@
-"""End-to-end check for notebooks 05 and 06 (Paper A's results and the exploration). No network.
+"""End-to-end check for notebooks 05, 06 and 09 (Paper A's results, the exploration, the exit values). No network.
 
     python tools/e2e_paper_a_results.py <scratch_dir> <repo_dir>
 
@@ -125,4 +125,57 @@ assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in bl
 block = run_explore(repo_copy("explore_other_b", IDENTITY))        # Paper B's lock names the real run, not this Drive's
 assert "CHECKS    STOPPED – Paper B: " in block and not (OUTPUT / "explore.xlsx").exists(), block
 
-print(f"\nNOTEBOOKS 05 AND 06 OK in all cases ({time.time() - t0:.0f}s)")
+
+
+# ---- notebook 09: the exit values, read offline from texts placed on the synthetic Drive
+import gzip  # noqa: E402
+from aem_research import takeprivate as tp  # noqa: E402
+from aem_research.io_utils import load_table  # noqa: E402
+
+A_DIR = DRIVE / "aem-research" / "cache" / "paper_a"
+D9 = load_table(A_DIR / "deals")
+sale = D9[D9["exit_route"].eq("sold to a listed buyer")].iloc[0]
+core = tp.exit_query_name(sale["target_name"])
+entry_ev = float(sale["enterprise_value"])
+for name, text in ((f"{sale['sale_adsh']}-index.htm.gz",
+                    '<table><tr><td>1</td><td>8-K</td><td><a href="/Archives/x/d8k.htm">d8k.htm</a></td><td>8-K</td><td>1</td></tr>'
+                    '<tr><td>2</td><td>Press release</td><td><a href="/Archives/x/ex99.htm">ex99.htm</a></td><td>EX-99.1</td><td>1</td></tr></table>'),
+                   (f"{sale['sale_adsh']}_d8k.htm.txt.gz", f"Item 2.01 Completion of Acquisition or Disposition of Assets. {core}."),
+                   (f"{sale['sale_adsh']}_ex99.htm.txt.gz",
+                    f"The buyer today announced the completion of its acquisition of {core} in a transaction valued at approximately "
+                    f"${entry_ev * 1.8 / 1e6:,.0f} million.")):
+    (A_DIR / "docs" / name).write_bytes(gzip.compress(text.encode("utf-8")))
+before = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
+
+
+def run_exits(repo: Path) -> str:
+    for f in ("paper_a_exits.txt", "paper_a_exits.xlsx"):
+        (OUTPUT / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(DRIVE), AEM_REPO_DIR=str(repo), AEM_SEC_OFFLINE="1")
+    nb = json.loads((repo / "notebooks" / "09_exits.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (OUTPUT / "paper_a_exits.txt").read_text(encoding="utf-8")
+
+
+block = run_exits(SCRATCH / "repo_explore")
+print(block)
+assert block.startswith("PAPER A EXITS v") and "CHECKS    locks ok · data runs ok" in block and "ERRORS    none" in block
+assert "INPUTS    deals 8 · sold to a listed buyer 1 · re ipo 1" in block
+assert "READ      user agent offline · sales 1 · cached 0 · read 1 · with value 1" in block
+assert "VALUES    sales with value 1 · usable 1" in block
+assert "X VALUE   by all · group all usable sales · n 1 · median value multiple 1.80" in block
+assert "X TRACK   value growth against the benchmark's multiple · n " in block
+assert f"READ 01 " in block and "(transaction)" in block and "ex99.htm" in block
+assert "WSIB      reports asked " in block and "WSIB      missing: " in block and "PACE      report date 20" in block
+wb = pd.read_excel(OUTPUT / "paper_a_exits.xlsx", sheet_name=None, engine="openpyxl")
+assert {"Exit values", "Exit groups", "Exit reading", "WSIB pace"} <= set(wb), set(wb)
+after = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
+assert all(after[k] == v for k, v in before.items()), "a table of the locked run was rewritten"
+assert {n.split(".")[0] for n in set(after) - set(before)} == {"exits", "wsib_funds_full"}, set(after) - set(before)
+assert "READ      user agent offline · sales 1 · cached 1 · read 0" in run_exits(SCRATCH / "repo_explore")      # a rerun reads nothing again
+block = run_exits(repo_copy("exits_unlocked", None, IDENTITY_B))
+assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and "X VALUE" not in block and "WSIB" not in block
+
+print(f"\nNOTEBOOKS 05, 06 AND 09 OK in all cases ({time.time() - t0:.0f}s)")

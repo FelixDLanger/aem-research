@@ -140,3 +140,22 @@ def test_the_drive_inventory_describes_folders_and_tables_and_survives_a_broken_
     assert "C2        windows 5,200 · lr 1.31 · " in block and "verdict confirmed" in block
     assert "C DATES   start date 2024-07-01 · windows 1,400" in block
     assert "DRIVE     FOLDERS" in followup_block({"release": 15, "problems": ["x"], "inventory": lines, "run": {}})     # also when stopped
+
+
+def test_exits_block_prints_the_reading_sample_and_the_wsib_state():
+    from aem_research.report import exits_block
+    r = {"release": 17, "lock_status_a": "locked", "lock_status_b": "locked", "inputs": {"deals": 814, "sold_to_a_listed_buyer": 135},
+         "exit_reading": {"sales": 135, "read": 130, "with_value": 88}, "exit_counts": {"sales_with_value": 88, "usable": 70},
+         "exit_groups": [{"by": "all", "group": "all usable sales", "n": 70, "median_value_multiple": 1.62, "median_years_held": 4.1}],
+         "exit_tracking": {"n": 64, "spearman": 0.21, "slope": 0.8}, "exit_sample": ["01 Acme → Buyer · 2019-07-01 · $1,000m (transaction)"],
+         "wsib": {"reports_asked": 42, "missing": 29}, "wsib_missing": "20160331, 20160630", "wsib_failed": "none",
+         "wsib_unparsed_lines": ["wsib_20220930_sample.txt: Investment Name"],
+         "wsib_pace": [{"report_date": "2023-03-31T00:00:00.000", "funds": 120, "dpi": 0.91}], "run": {}}
+    b = exits_block(r)
+    assert b.startswith("PAPER A EXITS v17") and "CHECKS    locks ok · data runs ok" in b
+    assert "READ      sales 135 · read 130 · with value 88" in b and "VALUES    sales with value 88 · usable 70" in b
+    assert "X VALUE   by all · group all usable sales · n 70 · median value multiple 1.62 · median years held 4.10" in b
+    assert "X TRACK   value growth against the benchmark's multiple · n 64 · spearman 0.21 · slope 0.80" in b
+    assert "READ 01 Acme → Buyer" in b and "WSIB      missing: 20160331, 20160630" in b
+    assert "WSIB RAW  wsib_20220930_sample.txt: Investment Name" in b and "PACE      report date 2023-03-31 · funds 120 · dpi 0.91" in b
+    assert "CHECKS    STOPPED – x" in exits_block({"release": 17, "problems": ["x"], "run": {}})

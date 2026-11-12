@@ -423,6 +423,40 @@ def explore_block(report: dict) -> str:
     return "\n".join(lines)
 
 
+def exits_block(report: dict) -> str:
+    """Notebook 09's paste block: the exit values with the sample to read, and WSIB's history."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lines = [f"PAPER A EXITS {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · Paper A {r.get('lock_status_a', '')} · Paper B {r.get('lock_status_b', '')}"]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("locks ok · data runs ok" if not problems else "STOPPED – " + " | ".join(problems)))
+    for label, key in (("INPUTS    ", "inputs"), ("READ      ", "exit_reading"), ("VALUES    ", "exit_counts")):
+        if r.get(key):
+            lines.append(label + _items(r[key]))
+    if r.get("exit_groups") or r.get("exit_tracking"):
+        lines.append("EXPLORE   everything below is exploratory (A-X1, A-X2): values are pattern-read, see the sample")
+    for row in r.get("exit_groups") or []:
+        lines.append("X VALUE   " + _kv(row))
+    if r.get("exit_tracking"):
+        lines.append("X TRACK   value growth against the benchmark's multiple · " + _kv(r["exit_tracking"]))
+    for line in r.get("exit_sample") or []:
+        lines.append("READ " + line)
+    if r.get("wsib"):
+        lines.append("WSIB      " + _items(r["wsib"]))
+        lines.append("WSIB      missing: " + str(r.get("wsib_missing", "none")))
+        lines.append("WSIB      failed: " + str(r.get("wsib_failed", "none")))
+    for line in r.get("wsib_unparsed_lines") or []:
+        lines.append("WSIB RAW  " + line)
+    for label, key in (("PACE      ", "wsib_pace"), ("VINTAGE   ", "wsib_vintages")):
+        for row in r.get(key) or []:
+            lines.append(label + _kv({k: (str(v)[:10] if k == "report_date" and v is not None else v) for k, v in row.items()}))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Paper B's H2 to H6 (notebook 07)
 # ---------------------------------------------------------------------------
@@ -445,7 +479,7 @@ def _kv(row: dict, skip=()) -> str:
             cell = v
         elif not _fin(v):
             cell = "n/a"
-        elif k in ("year", "start_year"):
+        elif k in ("year", "start_year", "vintage_year"):
             cell = f"{int(float(v))}"
         else:
             f = float(v)

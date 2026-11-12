@@ -72,6 +72,7 @@ NOTEBOOK_AR = ROOT / "notebooks" / "05_paper_a_results.ipynb"
 NOTEBOOK_X = ROOT / "notebooks" / "06_explore.ipynb"
 NOTEBOOK_E = ROOT / "notebooks" / "07_estimates.ipynb"
 NOTEBOOK_F = ROOT / "notebooks" / "08_followup.ipynb"
+NOTEBOOK_Z = ROOT / "notebooks" / "09_exits.ipynb"
 
 
 def test_diagnostic_notebook_is_valid_and_reads_only():
@@ -93,7 +94,7 @@ def test_notebooks_match_their_builders(tmp_path):
     import sys
     for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
                         ("build_notebook_diag.py", NOTEBOOK_D), ("build_notebook_results.py", NOTEBOOK_R),
-                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X), ("build_notebook_estimates.py", NOTEBOOK_E), ("build_notebook_followup.py", NOTEBOOK_F)):
+                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X), ("build_notebook_estimates.py", NOTEBOOK_E), ("build_notebook_followup.py", NOTEBOOK_F), ("build_notebook_exits.py", NOTEBOOK_Z)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
@@ -101,7 +102,7 @@ def test_notebooks_match_their_builders(tmp_path):
 
 def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     from aem_research import env
-    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X, NOTEBOOK_E, NOTEBOOK_F):
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X, NOTEBOOK_E, NOTEBOOK_F, NOTEBOOK_Z):
         stamp = env.notebook_build(nb_path)
         assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
         setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
@@ -120,7 +121,7 @@ def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
     from aem_research import env
     rel = aem_research.RELEASE
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X), ("07", NOTEBOOK_E), ("08", NOTEBOOK_F)):
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X), ("07", NOTEBOOK_E), ("08", NOTEBOOK_F), ("09", NOTEBOOK_Z)):
         assert env.notebook_release(nb_path) == rel, nb_path.name
         cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
         title = "".join(cells[0]["source"]).splitlines()[0]
@@ -219,3 +220,17 @@ def test_the_confirmation_plan_is_locked_with_three_hypotheses_and_explicit_date
     assert c.locked and [h["id"] for h in c.hypotheses] == ["C1", "C2", "C3"]
     assert c.get("dates.two_year") == ["2023-10-01", "2024-01-01", "2024-04-01", "2024-07-01"] and len(c.get("dates.one_year")) == 8
     assert c.get("outcomes.horizons_years") == [1, 2]
+
+
+def test_exits_notebook_checks_both_locks_and_writes_only_its_own_tables():
+    nb = json.loads(NOTEBOOK_Z.read_text(encoding="utf-8"))
+    codes = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    for i, src in enumerate(codes):
+        assert not re.search(r"^\s*[!%]", src, flags=re.M)
+        compile(src, f"cell-{i}", "exec")
+    joined = "\n".join(codes)
+    assert "paper_a_LOCK.json" in joined and "data_run_problems(cfg_a, RUN_A)" in joined
+    read = next(i for i, src in enumerate(codes) if "pxe.read_exits(" in src)
+    assert "if not problems:" in codes[read] and "pxe.reading_sample(" in codes[read]
+    saved = re.findall(r"save_table\([^,]+, A_DIR / \"([a-z_]+)\"\)", joined)
+    assert saved == ["wsib_funds_full"]                       # notebook 02's wsib_funds and deals are never written
