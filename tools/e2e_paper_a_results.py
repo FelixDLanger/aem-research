@@ -219,7 +219,8 @@ assert "SALE 01 tier " in block and f"acquisition of {core}" in block and "REIPO
 assert "A-H3      a deviation: the exit measure was rebuilt after the lock" in block
 for label in ("A-H3      measure as locked", "A-H3      measure checked sales, tiers A and B, and re-IPOs", "A-H3      measure checked sales, tier A only",
               "BY YEAR   year ", "VALUES    sales with value 1", "PAPER B   exploratory, combinations fixed in advance",
-              "COMBO     combination positive free cash flow · sample to 2017, five years", "OUTCOME   sample from 2018, five years · group best-ranked tenth"):
+              "COMBO     combination positive free cash flow · sample to 2017, five years", "LIT       second batch, same rule as the scan · tested ",
+              "COMBO     combination fallen with a fundamentals score of 4 or 5", "OUTCOME   sample from 2018, five years · group best-ranked tenth"):
     assert label in block, label
 wb = pd.read_excel(OUTPUT / "aem_final.xlsx", sheet_name=None, engine="openpyxl")
 assert {"Checked exits", "All exit documents", "A-H3", "Exit values", "B combinations", "B outcome model"} <= set(wb), set(wb)

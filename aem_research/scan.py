@@ -27,6 +27,18 @@ FLAGS = ("sale_any", "insider_routine_only", "several_buyers", "pharma_biotech",
          "profitable_growth", "fallen_and_growing", "fallen_and_cash_positive", "shrinking_share_count")
 
 
+# A second batch, fixed on Nov 13, 2026 after the first scan was read: patterns the finance
+# literature documents that the first list left out and that these tables can measure.
+# Long-term reversal (De Bondt and Thaler), nearness to the one-year high (George and Hwang),
+# past volatility (Ang, Hodrick, Xing and Zhang; lottery-type stocks), investment growth
+# (Titman, Wei and Xie), enterprise value to sales, change in the breadth of institutional
+# ownership (Chen, Hong and Stein), industry momentum (Moskowitz and Grinblatt), a
+# fundamentals score in the spirit of Piotroski, recent listing (Ritter), Graham's net cash.
+LIT_CONTINUOUS = ("momentum_36m", "near_high_1y", "volatility_8q", "capex_growth", "ev_to_sales", "breadth_change_1y",
+                  "industry_momentum_6m", "fundamentals_score")
+LIT_FLAGS = ("score_high", "score_low", "listed_under_3_years", "net_cash_two_thirds")
+
+
 def _num(f: pd.DataFrame, c: str) -> pd.Series:
     return pd.to_numeric(f[c], errors="coerce") if c in f.columns else pd.Series(np.nan, index=f.index)
 
@@ -47,6 +59,36 @@ def momentum(features: pd.DataFrame, panel: pd.DataFrame | None) -> pd.DataFrame
         back = pd.MultiIndex.from_arrays([out["ticker"].astype(str), out["start_date"] - pd.DateOffset(months=months)])
         then = p.reindex(back).to_numpy(dtype=float)
         out[col] = np.where((then > 0) & (now > 0), now / then - 1, np.nan)
+    return out
+
+
+def price_history(features: pd.DataFrame, panel: pd.DataFrame | None) -> pd.DataFrame:
+    """From the SEC panel's quarter-end prices before the start date: the 36-month price
+    change, the price against the highest of the last five quarter-ends, the volatility of
+    the last eight quarterly returns, and whether the series is under three years old."""
+    out = pd.DataFrame({"momentum_36m": np.nan, "near_high_1y": np.nan, "volatility_8q": np.nan, "listed_under_3_years": np.nan},
+                       index=features.index)
+    if panel is None or not len(panel) or not len(features):
+        return out
+    tick = features["ticker"].astype(str).to_numpy()
+    start = pd.to_datetime(features["start_date"]).astype("datetime64[ns]")
+    q = panel[["ticker", "date", "price"]].assign(date=pd.to_datetime(panel["date"]).astype("datetime64[ns]"), ticker=panel["ticker"].astype(str))
+    first = q.groupby("ticker")["date"].min()
+    p = q.drop_duplicates(["ticker", "date"]).set_index(["ticker", "date"])["price"]
+
+    def at(months):
+        v = p.reindex(pd.MultiIndex.from_arrays([tick, (start - pd.DateOffset(months=months)).to_numpy()])).to_numpy(dtype=float)
+        return np.where(v > 0, v, np.nan)
+    px = np.column_stack([at(m) for m in range(0, 27, 3)])               # now, 3, 6, ... 24 months back
+    out["momentum_36m"] = px[:, 0] / at(36) - 1
+    with np.errstate(all="ignore"):
+        high = np.nanmax(px[:, :5], axis=1)
+        out["near_high_1y"] = np.where(np.isfinite(px[:, :5]).sum(axis=1) >= 4, px[:, 0] / high, np.nan)
+        rets = np.log(px[:, :-1] / px[:, 1:])
+        out["volatility_8q"] = np.where(np.isfinite(rets).sum(axis=1) >= 6, np.nanstd(rets, axis=1, ddof=1), np.nan)
+    born = pd.Series(tick).map(first).to_numpy(dtype="datetime64[ns]")
+    age = (start.to_numpy() - born) / np.timedelta64(1, "D")
+    out["listed_under_3_years"] = np.where(np.isnan(age), np.nan, (age < 3 * 365.25).astype(float))
     return out
 
 
@@ -80,6 +122,32 @@ def candidates(w: pd.DataFrame, panel: pd.DataFrame | None = None) -> pd.DataFra
     x["shrinking_share_count"] = (shares < -0.02).astype(float).where(shares.notna())
     for c in ("sale_any", "insider_routine_only"):
         x[c] = est._flag(x[c]) if c in x.columns else np.nan
+    # ---- the second batch
+    hist = price_history(x, panel)
+    for c in hist.columns:
+        x[c] = hist[c].to_numpy()
+    capex, capex_prev = _num(x, "capex").abs(), _num(x, "capex_prev").abs()
+    x["capex_growth"] = capex / capex_prev.where(capex_prev > 0) - 1
+    x["ev_to_sales"] = ((cap - _num(x, "net_cash")) / rev).where(lambda v: v > 0)
+    b = _num(x, "breadth")
+    if "firm" in x.columns and b.notna().any():
+        lag = x[["firm", "start_date"]].assign(start_date=pd.to_datetime(x["start_date"]) + pd.DateOffset(years=1), _b=b.to_numpy())
+        lag = lag.dropna(subset=["firm", "_b"]).drop_duplicates(["firm", "start_date"])
+        prev = x[["firm", "start_date"]].assign(start_date=pd.to_datetime(x["start_date"])).merge(lag, on=["firm", "start_date"], how="left")["_b"]
+        x["breadth_change_1y"] = b.to_numpy() / np.where(prev.to_numpy() > 0, prev.to_numpy(), np.nan) - 1
+    else:
+        x["breadth_change_1y"] = np.nan
+    industry = (_num(x, "sic") // 100).where(_num(x, "sic").notna())
+    grp = x.assign(_i=industry.to_numpy(), _m=x["momentum_6m"].to_numpy()).groupby(["start_date", "_i"])["_m"]
+    x["industry_momentum_6m"] = grp.transform("mean").where(grp.transform("count") >= 5).to_numpy()
+    ocf, ocf_prev = _num(x, "ocf"), _num(x, "ocf_prev")
+    parts = [(ocf > 0, ocf.notna()), (ocf > ocf_prev, ocf.notna() & ocf_prev.notna()), (fcf > 0, fcf.notna()),
+             (shares <= 0.01, shares.notna()), (growth > 0, growth.notna())]
+    all_known = np.logical_and.reduce([k.to_numpy() for _, k in parts])
+    x["fundamentals_score"] = np.where(all_known, sum(c.to_numpy().astype(float) for c, _ in parts), np.nan)
+    x["score_high"] = np.where(all_known, (x["fundamentals_score"] >= 4).astype(float), np.nan)
+    x["score_low"] = np.where(all_known, (x["fundamentals_score"] <= 1).astype(float), np.nan)
+    x["net_cash_two_thirds"] = ((_num(x, "net_cash") / cap) >= 2 / 3).astype(float).where((_num(x, "net_cash") / cap).notna())
     # the mirror target: the window ended below half its entry value (five years; two on the new dates)
     for end, loss in (("end5", "loss5"), ("end2", "loss2")):
         if end in x.columns:
@@ -121,19 +189,19 @@ def _bh(p: pd.Series) -> pd.Series:
 
 
 def scan(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, resamples: int = 500, seed: int = 20261106,
-         fdr: float = 0.10, alpha: float = 0.05) -> pd.DataFrame:
+         fdr: float = 0.10, alpha: float = 0.05, continuous=CONTINUOUS, flags=FLAGS) -> pd.DataFrame:
     """One row per candidate, side and target: the ratio on discovery, holdout and the new
     dates, and whether it held."""
     x = candidates(w, panel)
     xn = candidates(w_new, panel) if w_new is not None and len(w_new) else None
     disc, hold = x[x["start_year"] <= DISCOVERY_TO], x[x["start_year"] > DISCOVERY_TO]
     sides = []
-    for c in CONTINUOUS:
+    for c in continuous:
         if c in x.columns and x[c].notna().any():
             lo, hi = _quintile_flags(x, c)
             lo_n, hi_n = _quintile_flags(xn, c) if xn is not None and c in xn.columns else (None, None)
             sides += [(c, "lowest fifth", lo, lo_n), (c, "highest fifth", hi, hi_n)]
-    for c in FLAGS:
+    for c in flags:
         if c in x.columns and x[c].notna().any():
             sides.append((c, "flag", x[c], xn[c] if xn is not None and c in xn.columns else None))
     rows = []
@@ -255,6 +323,14 @@ COMBOS = (
     ("AEM cohort: fallen, cash-positive, net cash, insider purchase", "h2a"),
     ("the 10x corner: price in the lowest fifth and a cash-burner with a short runway", "c_lottery"),
     ("avoid list: short runway, or burning cash with share count in the top fifth", "c_avoid"),
+    # the second batch: what the literature suggests for separating winners from losers among the cheap and the fallen
+    ("fallen with a fundamentals score of 4 or 5 (Piotroski's idea)", "c_fallen_score_high"),
+    ("fallen with a fundamentals score of 0 or 1", "c_fallen_score_low"),
+    ("fallen, score of 4 or 5, floor net of burn", "c_fallen_score_floor"),
+    ("cheap and good: cash-flow yield and margin both in the top fifth", "c_cheap_good"),
+    ("calm and cash-positive: volatility in the lowest fifth, positive free cash flow", "c_calm_fcf"),
+    ("volatility in the top fifth", "c_volatile"),
+    ("net cash at least two-thirds of market cap (Graham's idea)", "net_cash_two_thirds"),
 )
 
 
@@ -289,6 +365,14 @@ def with_combos(w: pd.DataFrame, panel=None) -> pd.DataFrame:
     put("c_fallen_growing_fcf", fallen & pos & (_num(x, "revenue_growth") > 0.1), known & _num(x, "revenue_growth").notna())
     put("c_lottery", low_price.eq(1) & x["burner_short_runway"].eq(1), low_price.notna() & x["burner_short_runway"].notna())
     put("c_avoid", x["burner_short_runway"].eq(1) | ((fcf < 0) & issuing.eq(1)), known)
+    calm, wild = _quintile_flags(x, "volatility_8q")
+    _, cheap = _quintile_flags(x, "fcf_yield")
+    put("c_fallen_score_high", fallen & x["score_high"].eq(1), x["score_high"].notna())
+    put("c_fallen_score_low", fallen & x["score_low"].eq(1), x["score_low"].notna())
+    put("c_fallen_score_floor", fallen & x["score_high"].eq(1) & (floor_net >= 0.30), x["score_high"].notna() & floor_net.notna())
+    put("c_cheap_good", cheap.eq(1) & margin.eq(1), cheap.notna() & margin.notna())
+    put("c_calm_fcf", calm.eq(1) & pos, calm.notna() & known)
+    put("c_volatile", wild.eq(1), wild.notna())
     for c in ("fcf_pos", "fallen", "h2a"):
         x[c] = est._flag(x[c]) if c in x.columns else np.nan
     return x
@@ -348,7 +432,7 @@ def asymmetry(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None,
 
 def outcome_model(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, seed: int = 20261106) -> pd.DataFrame:
     """The flexible version: gradient-boosted trees predict the log end multiple from all
-    measures (fitted on start dates to 2017). Scored out of time by what the best-ranked and
+    measures of both batches (fitted on start dates to 2017). Scored out of time by what the best-ranked and
     the worst-ranked tenth of windows actually ended at."""
     from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -356,11 +440,11 @@ def outcome_model(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=N
     xn = with_combos(w_new, panel) if w_new is not None and len(w_new) else None
     base = ("fcf_pos", "net_cash_pos", "low_dilution", "s1_proxy", "insider_any", "insider_cluster", "insider_opportunistic",
             "insider_post_results_cluster", "low_attention", "fallen")
-    cols = [c for c in (*CONTINUOUS, *FLAGS, *base) if c in x.columns]
+    cols = [c for c in (*CONTINUOUS, *LIT_CONTINUOUS, *FLAGS, *LIT_FLAGS, *base) if c in x.columns]
 
     def matrix(f):
         m = pd.DataFrame({c: (est._flag(f[c]) if c in base else pd.to_numeric(f[c], errors="coerce")) for c in cols})
-        for c in CONTINUOUS:
+        for c in (*CONTINUOUS, *LIT_CONTINUOUS):
             if c in m.columns:
                 m[c] = m[c].groupby(f["start_date"].to_numpy()).rank(pct=True)
         return m

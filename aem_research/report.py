@@ -508,6 +508,10 @@ def final_block(report: dict) -> str:
         lines.append("PAPER B   exploratory, combinations fixed in advance · " + _items(r["b_inputs"]))
     for row in r.get("combinations") or []:
         lines.append("COMBO     " + _kv(row))
+    if r.get("literature_counts"):
+        lines.append("LIT       second batch, same rule as the scan · " + _items(r["literature_counts"]))
+    for row in r.get("literature") or []:
+        lines.append("LIT       " + _kv(row))
     for row in r.get("outcome_model") or []:
         lines.append("OUTCOME   " + _kv(row))
     lines += _run_lines(r)

@@ -94,3 +94,25 @@ def test_the_outcome_model_ranks_out_of_time(w):
     assert m.loc[(hold, "worst-ranked tenth"), "below_half"] > m.loc[(hold, "all windows"), "below_half"]      # the planted loss side
     assert m.loc[(hold, "best-ranked tenth"), "windows"] < m.loc[(hold, "all windows"), "windows"]
     assert m.loc[(hold, "worst-ranked tenth"), "median_end"] < m.loc[(hold, "best-ranked tenth"), "median_end"]
+
+
+def test_the_second_batch_is_measured_from_values_before_the_start_date(w):
+    dates = pd.date_range("2012-01-01", "2015-01-01", freq="QS")
+    panel = pd.DataFrame({"ticker": "T0", "date": dates, "price": [10, 10, 10, 10, 10, 10, 10, 10, 20, 40, 30, 30, 30.0]})
+    row = w[(w["ticker"] == "T0") & (w["start_date"] == "2015-01-01")]
+    h = scan.price_history(row, panel).iloc[0]
+    assert h["momentum_36m"] == pytest.approx(2.0) and h["near_high_1y"] == pytest.approx(0.75)        # 30 against a high of 40
+    assert h["volatility_8q"] > 0 and h["listed_under_3_years"] == 0
+    young = scan.price_history(row, panel[panel["date"] >= "2013-01-01"]).iloc[0]
+    assert young["listed_under_3_years"] == 1 and np.isnan(young["momentum_36m"])
+    assert scan.price_history(row, None).isna().all().all()
+    r = row.assign(ocf=5.0, ocf_prev=1.0, fcf=2.0, share_growth=-0.01, revenue_growth=0.1, net_cash=8e8, market_cap=1e9, revenue=5e8,
+                   capex=3.0, capex_prev=2.0)
+    c = scan.candidates(r, panel).iloc[0]
+    assert c["fundamentals_score"] == 5 and c["score_high"] == 1 and c["score_low"] == 0 and c["net_cash_two_thirds"] == 1
+    assert c["capex_growth"] == pytest.approx(0.5) and c["ev_to_sales"] == pytest.approx(0.4)
+    assert np.isnan(scan.candidates(r.assign(ocf_prev=np.nan), panel).iloc[0]["fundamentals_score"])    # a score needs all five parts
+    t = scan.scan(w, None, resamples=200, continuous=scan.LIT_CONTINUOUS, flags=scan.LIT_FLAGS)
+    assert set(t["candidate"]) <= set(scan.LIT_CONTINUOUS) | set(scan.LIT_FLAGS) and "fundamentals_score" in set(t["candidate"])
+    x = scan.with_combos(w.iloc[:200])
+    assert {"c_fallen_score_high", "c_cheap_good", "c_calm_fcf", "c_volatile"} <= set(x.columns) and len(scan.COMBOS) == 25

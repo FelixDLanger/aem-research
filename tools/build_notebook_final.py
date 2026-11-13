@@ -34,7 +34,8 @@ md("""
 1. **Exits, read one by one.** Every 8-K hit of the exit search (up to ten filings a deal) is fetched from EDGAR and kept only if a sentence says the target itself was acquired; tier A also names the deal's sponsor, tier B does not. **Every kept sale is printed with its sentence** – I read all of them – plus a handful of rejected documents and the twelve re-IPO matches.
 2. **A-H3 on the checked exits.** The pre-registered test (visible exit within five years, deals completed 2012–2016 against 2017–2021), on the checked sales. This is a correction made after the lock and after the first result was seen; the paper reports it as a deviation next to the original.
 3. **Exit values** where the filing states one, against the entry value.
-4. **Paper B, the net question (exploratory):** eighteen combinations fixed in advance – free cash flow, the fall, momentum, cash, a floor of net cash (also net of five years of burn), buybacks, the AEM cohort, the 10x corner, an avoid list – each on five-year end multiples before and after 2018 and on the new dates: fewer wipe-outs, more multiples, both, or neither. And a flexible model that predicts the end multiple from all measures, scored out of time.
+5. **Paper B, a second batch of candidates from the literature (exploratory):** long-term reversal, nearness to the one-year high, past volatility, investment growth, enterprise value to sales, change in institutional breadth, industry momentum, a Piotroski-style fundamentals score, recent listing, Graham's net cash – same discovery and holdout rule as notebook 09's scan.
+4. **Paper B, the net question (exploratory):** twenty-five combinations fixed in advance – free cash flow, the fall, momentum, cash, a floor of net cash (also net of five years of burn), buybacks, the AEM cohort, the 10x corner, an avoid list – each on five-year end multiples before and after 2018 and on the new dates: fewer wipe-outs, more multiples, both, or neither. And a flexible model that predicts the end multiple from all measures, scored out of time.
 
 Needs the `SEC_USER_AGENT` secret. About 15 to 25 minutes (over a thousand filings are fetched once, then kept on Drive). Nothing the locked runs saved is overwritten.
 
@@ -214,6 +215,14 @@ if not problems:
         REPORT["combinations"] = rec(ASYM)
         show(ASYM[["combination", "sample", "windows", "median_end", "median_rest", "below_half", "below_half_rest", "at_least_2x",
                    "at_least_2x_rest", "shape", "verdict"]])
+    with LOG.phase("literature candidates"):
+        LIT = scan.scan(w_locked, w_new, panel=PANEL, resamples=500, seed=int(boot["seed"]), continuous=scan.LIT_CONTINUOUS,
+                        flags=scan.LIT_FLAGS)
+        BOOK["B literature scan"] = LIT
+        REPORT["literature"] = rec(LIT)
+        REPORT["literature_counts"] = {k: v for k, v in scan.digest(LIT).items() if k in ("tested", "discovery_significant")}
+        REPORT["literature_counts"]["held"] = int(LIT["verdict"].str.startswith("held").sum()) if len(LIT) else 0
+        show(LIT[LIT["verdict"] != ""])
     with LOG.phase("outcome model"):
         try:
             import sklearn  # noqa: F401
