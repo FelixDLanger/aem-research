@@ -227,3 +227,164 @@ def digest(t: pd.DataFrame, top: int = 12) -> dict:
         strongest += g.head(top).drop(columns="_d").to_dict("records")
     return {"tested": int(t["discovery_p"].notna().sum()), "discovery_significant": int((t["verdict"] != "").sum()),
             "held": held.to_dict("records"), "strongest": strongest}
+
+
+# ---------------------------------------------------------------------------
+# The net question (notebook 10): does any combination shift the whole outcome – fewer
+# wipe-outs and more multiples at once? Combinations fixed on Nov 13, 2026, before any of
+# them was set against an end multiple. Outcomes are end multiples (what holding paid),
+# not touches.
+# ---------------------------------------------------------------------------
+
+COMBOS = (
+    ("positive free cash flow", "fcf_pos"),
+    ("fallen", "fallen"),
+    ("fallen and cash-positive", "c_fallen_fcf"),
+    ("fallen, cash-positive, six-month momentum in the top fifth", "c_fallen_fcf_mom"),
+    ("six-month momentum in the top fifth", "c_mom"),
+    ("cash-positive with momentum in the top fifth", "c_fcf_mom"),
+    ("cash to market cap in the top fifth", "c_cash"),
+    ("cash to market cap in the top fifth and cash-positive", "c_cash_fcf"),
+    ("floor: net cash at least 30% of market cap", "c_floor"),
+    ("floor net of five years of burn at least 30%", "c_floor_net"),
+    ("fallen with a floor net of burn", "c_fallen_floor"),
+    ("fallen, cash-positive, floor", "c_fallen_fcf_floor"),
+    ("cash-positive and shrinking share count", "c_fcf_buyback"),
+    ("cash-flow margin in the top fifth and shrinking share count", "c_quality"),
+    ("fallen, growing above 10%, cash-positive", "c_fallen_growing_fcf"),
+    ("AEM cohort: fallen, cash-positive, net cash, insider purchase", "h2a"),
+    ("the 10x corner: price in the lowest fifth and a cash-burner with a short runway", "c_lottery"),
+    ("avoid list: short runway, or burning cash with share count in the top fifth", "c_avoid"),
+)
+
+
+def with_combos(w: pd.DataFrame, panel=None) -> pd.DataFrame:
+    x = candidates(w, panel)
+    flag = lambda c: est._flag(x[c]).eq(1) if c in x.columns else pd.Series(False, index=x.index)  # noqa: E731
+    fcf, cap = _num(x, "fcf"), _num(x, "market_cap").where(lambda v: v > 0)
+    pos, fallen = fcf > 0, flag("fallen")
+    _, mom = _quintile_flags(x, "momentum_6m")
+    _, cash = _quintile_flags(x, "cash_to_cap")
+    _, margin = _quintile_flags(x, "fcf_margin")
+    low_price, _ = _quintile_flags(x, "entry_price")
+    _, issuing = _quintile_flags(x, "share_growth")
+    floor = _num(x, "net_cash") / cap
+    floor_net = (_num(x, "net_cash") + 5 * fcf.clip(upper=0)) / cap
+    known = fcf.notna()
+
+    def put(name, cond, need):
+        x[name] = cond.astype(float).where(need)
+    put("c_fallen_fcf", fallen & pos, known)
+    put("c_fallen_fcf_mom", fallen & pos & mom.eq(1), known & mom.notna())
+    put("c_mom", mom.eq(1), mom.notna())
+    put("c_fcf_mom", pos & mom.eq(1), known & mom.notna())
+    put("c_cash", cash.eq(1), cash.notna())
+    put("c_cash_fcf", cash.eq(1) & pos, known & cash.notna())
+    put("c_floor", floor >= 0.30, floor.notna())
+    put("c_floor_net", floor_net >= 0.30, floor_net.notna())
+    put("c_fallen_floor", fallen & (floor_net >= 0.30), floor_net.notna())
+    put("c_fallen_fcf_floor", fallen & pos & (floor >= 0.30), known & floor.notna())
+    put("c_fcf_buyback", pos & x["shrinking_share_count"].eq(1), known & x["shrinking_share_count"].notna())
+    put("c_quality", margin.eq(1) & x["shrinking_share_count"].eq(1), margin.notna() & x["shrinking_share_count"].notna())
+    put("c_fallen_growing_fcf", fallen & pos & (_num(x, "revenue_growth") > 0.1), known & _num(x, "revenue_growth").notna())
+    put("c_lottery", low_price.eq(1) & x["burner_short_runway"].eq(1), low_price.notna() & x["burner_short_runway"].notna())
+    put("c_avoid", x["burner_short_runway"].eq(1) | ((fcf < 0) & issuing.eq(1)), known)
+    for c in ("fcf_pos", "fallen", "h2a"):
+        x[c] = est._flag(x[c]) if c in x.columns else np.nan
+    return x
+
+
+def _side(g: pd.DataFrame, sig: str, end: str, resamples: int, seed: int) -> dict:
+    """A group against the rest of the same sample: the end multiple's shape and the
+    firm-cluster intervals of the two differences that define asymmetry."""
+    y = g[g[end].notna() & g[sig].notna()]
+    s, e = y[sig].to_numpy(dtype=float), y[end].to_numpy(dtype=float)
+    n1 = int(s.sum())
+    if len(y) < 300 or n1 < 50 or n1 > len(y) - 50:
+        return {"windows": n1}
+    loss, gain = (e < 0.5).astype(float), (e >= 2).astype(float)
+    cl = est.Clusters(y["firm"], resamples, seed)
+    _, b = cl.sums(s * loss, s, (1 - s) * loss, 1 - s, s * gain, (1 - s) * gain)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d_loss = b[:, 0] / b[:, 1] - b[:, 2] / b[:, 3]
+        d_gain = b[:, 4] / b[:, 1] - b[:, 5] / b[:, 3]
+    in_, out = e[s == 1], e[s == 0]
+    lo_l, hi_l = est._ci(d_loss)
+    lo_g, hi_g = est._ci(d_gain)
+    fewer, more_loss = hi_l < 0, lo_l > 0
+    more, fewer_gain = lo_g > 0, hi_g < 0
+    shape = ("asymmetric" if fewer and more else "defensive" if fewer and not fewer_gain else "defensive, costs upside" if fewer
+             else "variance" if more_loss and more else "worse" if more_loss else "more upside, same losses" if more else "no difference")
+    return {"windows": n1, "median_end": float(np.median(in_)), "median_rest": float(np.median(out)), "mean_end": float(in_.mean()),
+            "mean_rest": float(out.mean()), "below_half": float((in_ < 0.5).mean()), "below_half_rest": float((out < 0.5).mean()),
+            "at_least_2x": float((in_ >= 2).mean()), "at_least_2x_rest": float((out >= 2).mean()),
+            "at_least_3x": float((in_ >= 3).mean()), "at_least_3x_rest": float((out >= 3).mean()), "shape": shape}
+
+
+def asymmetry(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, resamples: int = 500, seed: int = 20261106) -> pd.DataFrame:
+    """Every combination on three samples: five-year end multiples on start dates to 2017 and
+    from 2018, two-year end multiples on the new dates. `verdict` is the shape that both
+    five-year samples agree on (the new dates are shown beside it)."""
+    x = with_combos(w, panel)
+    xn = with_combos(w_new, panel) if w_new is not None and len(w_new) else None
+    rows = []
+    for name, col in COMBOS:
+        if col not in x.columns:
+            continue
+        parts = [("to 2017, five years", x[x["start_year"] <= DISCOVERY_TO], "end5"),
+                 ("from 2018, five years", x[x["start_year"] > DISCOVERY_TO], "end5")]
+        if xn is not None and col in xn.columns and "end2" in xn.columns:
+            parts.append(("new dates, two years", xn, "end2"))
+        shapes = []
+        for sample, g, end in parts:
+            r = _side(g, col, end, resamples, seed)
+            shapes.append(r.get("shape", "too few"))
+            rows.append({"combination": name, "sample": sample, **r})
+        verdict = shapes[0] if len(shapes) >= 2 and shapes[0] == shapes[1] and shapes[0] != "too few" else "not stable"
+        for r in rows[-len(parts):]:
+            r["verdict"] = verdict
+    return pd.DataFrame(rows)
+
+
+def outcome_model(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, seed: int = 20261106) -> pd.DataFrame:
+    """The flexible version: gradient-boosted trees predict the log end multiple from all
+    measures (fitted on start dates to 2017). Scored out of time by what the best-ranked and
+    the worst-ranked tenth of windows actually ended at."""
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    x = with_combos(w, panel)
+    xn = with_combos(w_new, panel) if w_new is not None and len(w_new) else None
+    base = ("fcf_pos", "net_cash_pos", "low_dilution", "s1_proxy", "insider_any", "insider_cluster", "insider_opportunistic",
+            "insider_post_results_cluster", "low_attention", "fallen")
+    cols = [c for c in (*CONTINUOUS, *FLAGS, *base) if c in x.columns]
+
+    def matrix(f):
+        m = pd.DataFrame({c: (est._flag(f[c]) if c in base else pd.to_numeric(f[c], errors="coerce")) for c in cols})
+        for c in CONTINUOUS:
+            if c in m.columns:
+                m[c] = m[c].groupby(f["start_date"].to_numpy()).rank(pct=True)
+        return m
+    d = x[(x["start_year"] <= DISCOVERY_TO) & x["end5"].notna()]
+    if len(d) < 1000:
+        return pd.DataFrame([{"sample": "to 2017", "windows": int(len(d)), "note": "too few windows to fit"}])
+    md = matrix(d)
+    use = [c for c in md.columns if md[c].nunique(dropna=True) >= 2]
+    model = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=200, min_samples_leaf=200, l2_regularization=1.0,
+                                          loss="absolute_error", random_state=int(seed) % (2 ** 31))
+    model.fit(md[use].to_numpy(dtype=float), np.log(d["end5"].clip(lower=0.01)).to_numpy())
+    rows = []
+    for sample, g, end in (("to 2017, five years (fitted here, flattering)", d, "end5"),
+                           ("from 2018, five years", x[(x["start_year"] > DISCOVERY_TO) & x["end5"].notna()], "end5"),
+                           ("new dates, two years", xn[xn["end2"].notna()] if xn is not None and "end2" in xn.columns else None, "end2")):
+        if g is None or len(g) < 300:
+            continue
+        p = model.predict(matrix(g)[use].to_numpy(dtype=float))
+        e = g[end].to_numpy(dtype=float)
+        for label, pick in (("best-ranked tenth", p >= np.quantile(p, 0.9)), ("best-ranked fifth", p >= np.quantile(p, 0.8)),
+                            ("all windows", np.ones(len(e), dtype=bool)), ("worst-ranked fifth", p <= np.quantile(p, 0.2)),
+                            ("worst-ranked tenth", p <= np.quantile(p, 0.1))):
+            v = e[pick]
+            rows.append({"sample": sample, "group": label, "windows": int(len(v)), "median_end": float(np.median(v)),
+                         "mean_end": float(v.mean()), "below_half": float((v < 0.5).mean()), "at_least_2x": float((v >= 2).mean()),
+                         "at_least_3x": float((v >= 3).mean())})
+    return pd.DataFrame(rows)

@@ -71,3 +71,26 @@ def test_the_model_bound_scores_out_of_time_and_survives_an_empty_measure(w):
     assert 0.4 < none["auc"] < 0.6                                                # and noise scores as noise
     assert m.loc[("3x within 3 years", "discovery (fitted here, flattering)"), "auc"] >= hold["auc"]
     assert m.loc[("ended 5 years below half", "holdout (start dates from 2018)"), "auc"] > 0.55
+
+
+def test_combinations_are_judged_on_end_multiples_and_only_stable_shapes_get_a_verdict(w):
+    t = scan.asymmetry(w, None, resamples=300)
+    assert set(t["sample"]) == {"to 2017, five years", "from 2018, five years"} and t["combination"].nunique() >= 15
+    burn = t[t["combination"].str.startswith("avoid list")]
+    assert (burn["below_half"] > burn["below_half_rest"]).all() and set(burn["verdict"]) <= {"worse", "variance"}   # losses were planted there
+    noise = t[t["combination"].eq("positive free cash flow")]                       # a coin flip in this fixture
+    assert noise["verdict"].iloc[0] in ("no difference", "not stable") and (noise["below_half"] - noise["below_half_rest"]).abs().max() < 0.03
+    known = t[t["shape"].notna()]
+    assert set(known["shape"]) <= {"asymmetric", "defensive", "defensive, costs upside", "variance", "worse", "more upside, same losses",
+                                   "no difference"}
+    assert (t.groupby("combination")["verdict"].nunique() == 1).all()
+    x = scan.with_combos(w.iloc[:50].assign(net_cash=4e8, market_cap=1e9, fcf=-5e7))
+    assert x["c_floor"].eq(1).all() and x["c_floor_net"].eq(0).all()               # 40% of the price, 15% after five years of burn
+
+
+def test_the_outcome_model_ranks_out_of_time(w):
+    m = scan.outcome_model(w, None).set_index(["sample", "group"])
+    hold = "from 2018, five years"
+    assert m.loc[(hold, "worst-ranked tenth"), "below_half"] > m.loc[(hold, "all windows"), "below_half"]      # the planted loss side
+    assert m.loc[(hold, "best-ranked tenth"), "windows"] < m.loc[(hold, "all windows"), "windows"]
+    assert m.loc[(hold, "worst-ranked tenth"), "median_end"] < m.loc[(hold, "best-ranked tenth"), "median_end"]

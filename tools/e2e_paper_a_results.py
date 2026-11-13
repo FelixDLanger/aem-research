@@ -186,4 +186,48 @@ assert "READ      user agent offline · sales 1 · cached 1 · read 0" in run_ex
 block = run_exits(repo_copy("exits_unlocked", None, IDENTITY_B))
 assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and "X VALUE" not in block and "WSIB" not in block
 
-print(f"\nNOTEBOOKS 05, 06 AND 09 OK in all cases ({time.time() - t0:.0f}s)")
+
+
+# ---- notebook 10: the exit measure rebuilt from the hit documents, offline
+H10 = load_table(A_DIR / "fts_exits")
+hit = H10[H10["key"].eq(sale["deal_id"])].iloc[0]
+sponsor = str(sale.get("sponsor") or "")
+(A_DIR / "docs" / f"{hit['adsh']}_{tp._safe(str(hit['file_name']))}.txt.gz").write_bytes(gzip.compress(
+    (f"Item 2.01. The Company completed its acquisition of {core} from funds advised by {sponsor or 'its owners'} in a transaction valued at "
+     f"approximately ${entry_ev * 1.8 / 1e6:,.0f} million. Other matters follow.").encode("utf-8")))
+before = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
+
+
+def run_final(repo: Path) -> str:
+    for f in ("final.txt", "aem_final.xlsx"):
+        (OUTPUT / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(DRIVE), AEM_REPO_DIR=str(repo), AEM_SEC_OFFLINE="1")
+    nb = json.loads((repo / "notebooks" / "10_final.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (OUTPUT / "final.txt").read_text(encoding="utf-8")
+
+
+run_notebook(SCRATCH / "repo_ok")                     # notebook 05 again: the stopped cases above removed its analysis sample
+before = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
+block = run_final(SCRATCH / "repo_explore")
+print(block)
+assert block.startswith("AEM FINAL v") and "CHECKS    locks ok · data runs ok" in block and "ERRORS    none" in block
+assert "EXITS     user agent offline · deals with hits 1 · documents 1 · cached 0 · read 1" in block and "deals with a checked sale 1" in block
+assert "SALE 01 tier " in block and f"acquisition of {core}" in block and "REIPO 01 " in block
+assert "A-H3      a deviation: the exit measure was rebuilt after the lock" in block
+for label in ("A-H3      measure as locked", "A-H3      measure checked sales, tiers A and B, and re-IPOs", "A-H3      measure checked sales, tier A only",
+              "BY YEAR   year ", "VALUES    sales with value 1", "PAPER B   exploratory, combinations fixed in advance",
+              "COMBO     combination positive free cash flow · sample to 2017, five years", "OUTCOME   sample from 2018, five years · group best-ranked tenth"):
+    assert label in block, label
+wb = pd.read_excel(OUTPUT / "aem_final.xlsx", sheet_name=None, engine="openpyxl")
+assert {"Checked exits", "All exit documents", "A-H3", "Exit values", "B combinations", "B outcome model"} <= set(wb), set(wb)
+after = {p_.name: p_.stat().st_mtime_ns for p_ in A_DIR.iterdir() if p_.is_file()}
+assert all(after[k] == v for k, v in before.items()), "a table of the locked run was rewritten"
+assert {n.split(".")[0] for n in set(after) - set(before)} == {"exits_validated"}, set(after) - set(before)
+assert "cached 1 · read 0" in run_final(SCRATCH / "repo_explore")
+block = run_final(repo_copy("final_unlocked", None, IDENTITY_B))
+assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and "SALE" not in block and "COMBO" not in block
+
+print(f"\nNOTEBOOKS 05, 06, 09 AND 10 OK in all cases ({time.time() - t0:.0f}s)")

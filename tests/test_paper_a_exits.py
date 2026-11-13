@@ -107,3 +107,59 @@ def test_implausible_multiples_are_kept_out_of_the_statistics_and_tracking_needs
     assert set(g["by"]) == {"all", "entry regime", "exit regime", "exit value kind", "buyer type", "sample"}
     assert g.loc[g["group"].eq("entered 2022 or later"), "n"].iloc[0] == 10 and (g["ci_low"] <= g["median_value_multiple"]).all()
     assert not len(pxe.exit_candidates(pd.DataFrame({"deal_id": ["a"]})))
+
+
+def test_an_exit_counts_only_where_a_sentence_says_the_target_was_acquired():
+    v = pxe.validate_exit
+    a = v("Intercontinental Exchange, Inc. today announced that it has completed its acquisition of Ellie Mae from private equity firm "
+          "Thoma Bravo. Other text follows.", "Ellie Mae", "Thoma Bravo")
+    assert a["tier"] == "A" and a["sponsor_named"] and "acquisition of Ellie Mae" in a["sentence"]
+    assert v("The Company completed the acquisition of Acme Widgets.", "Acme Widgets", "KKR")["tier"] == "B"          # sponsor not named
+    assert v("Acme Widgets was acquired by Buyer Corp. for $2.0 billion.", "Acme Widgets", None)["tier"] == "B"
+    assert v("Following the merger, Acme Widgets became an indirect wholly owned subsidiary of Buyer.", "Acme Widgets", None)["tier"] == "B"
+    # what notebook 02 let through
+    assert v("CommerceHub, Inc. today announced it has completed its acquisition of ChannelAdvisor Corporation. More.", "Commercehub",
+             "GTCR")["reason"] == "the target is the acquirer"
+    assert v("The Company completed the acquisition of a portfolio of 11 retail properties anchored by PetSmart and other tenants.",
+             "Petsmart", "BC Partners")["tier"] == ""
+    assert v("Coherus completed the divestiture of its ophthalmology franchise group of products.", "Franchise Group",
+             None)["reason"] == "the name does not appear as a name"
+    assert v("Nordstrom is a customer of the Company. The Company completed the acquisition of Maddox Industries.", "Nordstrom", None)["tier"] == ""
+    assert v("RingCentral acquired intellectual property from Mitel for $650 million.", "Mitel", None)["tier"] == ""
+    assert v("", "Acme", None)["tier"] == "" and v("text", None, None)["tier"] == ""
+
+
+def test_every_hit_is_read_the_best_one_chosen_and_the_sample_recomputed(tmp_path):
+    d = _deals().assign(sponsor=["Thoma Bravo", "KKR", None, "Apollo"], reipo_date=pd.NaT)
+    hits = pd.DataFrame({
+        "key": ["d1", "d1", "d2", "d3", "d1"],
+        "adsh": ["0000900009-16-000001", "0000900001-19-000001", "0000900002-23-000002", "0000900003-25-000003", "0000000011-17-000001"],
+        "file_name": ["early.htm", "ex991.htm", "d8k.htm", "d8k.htm", "own.htm"],
+        "ciks": ["900009", "900001;11", "900002", "900003", "11"], "names": ["Landlord REIT  (LR)", "Buyer One  (B1)", "Buyer Two", "Buyer Three", "Acme Widgets Inc"],
+        "form": "8-K", "file_type": ["8-K", "EX-99.1", "8-K", "8-K", "8-K"],
+        "file_date": pd.to_datetime(["2016-03-01", "2019-07-01", "2023-10-01", "2025-03-01", "2017-01-01"])})
+    docs = tmp_path / "docs"
+    _put(docs / "0000900009-16-000001_early.htm.txt.gz", "The Company completed the acquisition of a property leased to Acme Widgets.")
+    _put(docs / "0000900001-19-000001_ex991.htm.txt.gz", "Buyer One completed its acquisition of Acme Widgets from Thoma Bravo in a "
+                                                         "transaction valued at approximately $1.0 billion.")
+    _put(docs / "0000900002-23-000002_d8k.htm.txt.gz", "Buyer Two completed the acquisition of Beta Systems.")
+    h = pxe.exit_hits(d, hits)
+    assert len(h) == 4 and "0000000011-17-000001" not in set(h["adsh"])                 # the target's own filing is not a buyer's
+    out, st = pxe.validate_exits(d, hits, client=None, cache_dir=tmp_path, offline=True, log=None)
+    assert st == {"deals_with_hits": 3, "documents": 4, "cached": 0, "read": 3, "missing": 1, "failed": 0}
+    c = pxe.chosen_exits(out).set_index("deal_id")
+    assert list(c.index) == ["d1", "d2"] and c.loc["d1", "tier"] == "A" and c.loc["d2", "tier"] == "B"
+    assert c.loc["d1", "sale_date_checked"] == pd.Timestamp("2019-07-01")               # not the landlord's filing of 2016
+    assert c.loc["d1", "exit_value_usd"] == pytest.approx(1e9)
+    _, st2 = pxe.validate_exits(d, hits, client=None, cache_dir=tmp_path, offline=True, log=None)
+    assert st2["cached"] == 3 and st2["read"] == 0
+    sample = d.assign(group="core", exit_event=[True, True, True, False], exit_years=[0.7, 5.0, 2.5, 10.0], cohort="")
+    s2 = pxe.with_checked_exits(sample, c.reset_index())
+    assert s2.attrs["as_of"] == pd.Timestamp("2016-04-01") + pd.Timedelta(days=round(10.0 * 365.25))   # read back from the censored row
+    assert s2["exit_event"].tolist() == [True, True, False, False] and s2.loc[0, "exit_years"] == pytest.approx(4.0, abs=0.01)
+    assert s2.loc[2, "exit_years"] == pytest.approx((s2.attrs["as_of"] - pd.Timestamp("2022-09-01")).days / 365.25)
+    only_a = pxe.with_checked_exits(sample, c.reset_index(), tiers=("A",))
+    assert only_a["exit_event"].tolist() == [True, False, False, False]
+    lines = pxe.exit_lines(d, out, c.reset_index())
+    assert lines[0].startswith("SALE 01 tier A · ACME WIDGETS INC (Thoma Bravo) → Buyer One") and "acquisition of Acme Widgets" in lines[0]
+    assert lines[1].startswith("SALE 02 tier B") and any(x.startswith("REJECTED 01 GAMMA FOODS INC") for x in lines)

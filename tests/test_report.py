@@ -159,3 +159,19 @@ def test_exits_block_prints_the_reading_sample_and_the_wsib_state():
     assert "READ 01 Acme → Buyer" in b and "WSIB      missing: 20160331, 20160630" in b
     assert "WSIB RAW  wsib_20220930_sample.txt: Investment Name" in b and "PACE      report date 2023-03-31 · funds 120 · dpi 0.91" in b
     assert "CHECKS    STOPPED – x" in exits_block({"release": 17, "problems": ["x"], "run": {}})
+
+
+def test_final_block_prints_every_sale_line_and_marks_h3_as_a_deviation():
+    from aem_research.report import final_block
+    b = final_block({"release": 21, "lock_status_a": "locked", "lock_status_b": "locked", "exit_check": {"documents": 900, "tier_a": 30},
+                     "exit_lines": ["SALE 01 tier A · ELLIE MAE INC (Thoma Bravo) → ICE", "REIPO 01 X → X"], "as_of": "2026-11-10",
+                     "h3": [{"measure": "checked sales", "early_n": 60, "early_exits": 9, "late_rate": 0.12, "h3_p": 0.4}],
+                     "combinations": [{"combination": "positive free cash flow", "sample": "from 2018, five years", "windows": 14000,
+                                       "below_half": 0.17, "shape": "defensive", "verdict": "defensive"}],
+                     "outcome_model": [{"sample": "from 2018, five years", "group": "best-ranked tenth", "median_end": 1.3}], "run": {}})
+    assert b.startswith("AEM FINAL v21") and "SALE 01 tier A · ELLIE MAE INC" in b and "REIPO 01 X → X" in b
+    assert "A-H3      a deviation: the exit measure was rebuilt after the lock and after the first result · follow-up to 2026-11-10" in b
+    assert "A-H3      measure checked sales · early n 60 · early exits 9" in b
+    assert "COMBO     combination positive free cash flow · sample from 2018, five years · windows 14,000" in b and "verdict defensive" in b
+    assert "OUTCOME   sample from 2018, five years · group best-ranked tenth · median end 1.30" in b
+    assert "CHECKS    STOPPED – x" in final_block({"release": 21, "problems": ["x"], "run": {}})

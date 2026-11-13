@@ -475,6 +475,46 @@ def exits_block(report: dict) -> str:
     return "\n".join(lines)
 
 
+def final_block(report: dict) -> str:
+    """Notebook 10's paste block: every checked exit with its sentence, A-H3 on the checked
+    exits, and Paper B's combinations."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lines = [f"AEM FINAL {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · Paper A {r.get('lock_status_a', '')} · Paper B {r.get('lock_status_b', '')}"]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("locks ok · data runs ok" if not problems else "STOPPED – " + " | ".join(problems)))
+    for label, key in (("INPUTS    ", "inputs"), ("EXITS     ", "exit_check"), ("REJECTED  ", "exit_reasons")):
+        if r.get(key):
+            lines.append(label + _items(r[key]))
+    for line in r.get("exit_lines") or []:
+        lines.append(line)
+    if r.get("h3"):
+        lines.append(f"A-H3      a deviation: the exit measure was rebuilt after the lock and after the first result · follow-up to {r.get('as_of', 'n/a')}")
+    for row in r.get("h3") or []:
+        lines.append("A-H3      " + _kv(row))
+    for row in r.get("exits_by_year") or []:
+        lines.append("BY YEAR   " + _kv(row))
+    for row in r.get("slowdown") or []:
+        lines.append("SLOWDOWN  exit within three years, on the checked exits · " + _kv(row))
+    if r.get("exit_counts"):
+        lines.append("VALUES    " + _items(r["exit_counts"]))
+    for row in r.get("exit_groups") or []:
+        lines.append("X VALUE   " + _kv(row))
+    if r.get("exit_tracking"):
+        lines.append("X TRACK   value growth against the benchmark's multiple · " + _kv(r["exit_tracking"]))
+    if r.get("b_inputs"):
+        lines.append("PAPER B   exploratory, combinations fixed in advance · " + _items(r["b_inputs"]))
+    for row in r.get("combinations") or []:
+        lines.append("COMBO     " + _kv(row))
+    for row in r.get("outcome_model") or []:
+        lines.append("OUTCOME   " + _kv(row))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Paper B's H2 to H6 (notebook 07)
 # ---------------------------------------------------------------------------
@@ -497,7 +537,7 @@ def _kv(row: dict, skip=()) -> str:
             cell = v
         elif not _fin(v):
             cell = "n/a"
-        elif k in ("year", "start_year", "vintage_year"):
+        elif k in ("year", "start_year", "vintage_year", "completion_year"):
             cell = f"{int(float(v))}"
         else:
             f = float(v)
