@@ -202,7 +202,11 @@ if FULL:
                  "rev": np.abs(rng.normal(30e6, 5e6, len(qe)))}
         flows["opinc"] = flows["rev"] * 0.12                   # Paper A: EBITDA inputs (no extra random draws,
         flows["dna"] = flows["rev"] * 0.05                     # so the rest of the synthetic data is unchanged)
+        flows["ni"] = flows["ocf"] * 0.7 - 5e5                 # the accounting batch (notebook 11): derived as well
+        flows["cogs"] = flows["rev"] * (0.5 + 0.05 * (cik % 7))
+        flows["rnd"] = flows["rev"] * 0.03 * (cik % 3)
         flows = {k: pd.Series(v, index=qe) for k, v in flows.items()}
+        total = pd.Series(1.5e8 * (1 + 0.2 * (cik % 5)) * (1 + 0.01 * (cik % 4) * np.arange(len(qe)) / 4), index=qe)
         wad = pd.Series(5e7 * (1 + 0.01 * np.arange(len(qe)) / 4), index=qe)
         for k_, P in enumerate(qe):
             if P < pd.Timestamp("2011-06-30") or P > last:
@@ -223,10 +227,20 @@ if FULL:
                 q = 4 if k == 4 else k
                 for tag, key in (("NetCashProvidedByUsedInOperatingActivities", "ocf"),
                                  ("PaymentsToAcquirePropertyPlantAndEquipment", "capex"), ("Revenues", "rev"),
-                                 ("OperatingIncomeLoss", "opinc"), ("DepreciationDepletionAndAmortization", "dna")):
+                                 ("OperatingIncomeLoss", "opinc"), ("DepreciationDepletionAndAmortization", "dna"),
+                                 ("NetIncomeLoss", "ni"), ("CostOfRevenue", "cogs"), ("ResearchAndDevelopmentExpense", "rnd")):
+                    if key == "rnd" and cik % 3 == 0:
+                        continue                                # a third of the companies report no R&D
                     nums.append(num_row(adsh, tag, f"{P_:%Y%m%d}", q, round(float(flows[key][ytd].sum()), 0)))
                 nums.append(num_row(adsh, "WeightedAverageNumberOfDilutedSharesOutstanding", f"{P_:%Y%m%d}",
                                     1 if k < 4 else 4, round(float(wad[P_] * splits_so_far(t, filed)), 0), "shares"))
+            for P_ in (P, P - pd.DateOffset(months=12) + pd.offsets.MonthEnd(0)):
+                if P_ in total.index:
+                    a_ = float(total[P_])
+                    e_ = a_ * (0.25 + 0.1 * (cik % 6) - 0.5 * (cik % 11 == 0))
+                    for tag, v_ in (("Assets", a_), ("StockholdersEquity", e_), ("Liabilities", a_ - e_), ("AssetsCurrent", a_ * 0.4),
+                                    ("LiabilitiesCurrent", a_ * 0.15 * (1 + (cik % 4) / 4))):
+                        nums.append(num_row(adsh, tag, f"{P_:%Y%m%d}", 0, round(v_, 0)))
             nums += [num_row(adsh, "CashAndCashEquivalentsAtCarryingValue", f"{P:%Y%m%d}", 0,
                              round(float(rng.uniform(5e6, 6e7)), 0)),
                      num_row(adsh, "LongTermDebt", f"{P:%Y%m%d}", 0, round(float(rng.uniform(0, 5e7)), 0))]

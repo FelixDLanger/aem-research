@@ -175,3 +175,19 @@ def test_final_block_prints_every_sale_line_and_marks_h3_as_a_deviation():
     assert "COMBO     combination positive free cash flow · sample from 2018, five years · windows 14,000" in b and "verdict defensive" in b
     assert "OUTCOME   sample from 2018, five years · group best-ranked tenth · median end 1.30" in b
     assert "CHECKS    STOPPED – x" in final_block({"release": 21, "problems": ["x"], "run": {}})
+
+
+def test_accounting_block_shows_coverage_the_batch_and_the_hand_read_exits():
+    from aem_research.report import accounting_block
+    b = accounting_block({"release": 23, "lock_status_a": "locked", "lock_status_b": "locked",
+                          "statements": {"files": 63, "cached": 0, "downloaded": 62, "missing": 1}, "statement_gaps": "2026q3",
+                          "statement_groups": {"assets": 900000}, "coverage": {"accruals": 0.93, "f_score": 0.71}, "f_score": {"3": 1200, "7": 5400},
+                          "scan_counts": {"tested": 40, "held": 9}, "scan": [{"target": "3x within 3 years", "candidate": "accruals", "holdout_lr": 1.2}],
+                          "combinations": [{"combination": "fallen with an F-score of 7 to 9", "sample": "from 2018, five years", "shape": "asymmetric"}],
+                          "h3_counts": [{"level": "wide", "exits_counted": 12}], "verified_exits": ["ELLIE MAE INC · completed 2019-04-17"],
+                          "h3": [{"measure": "hand-read exits, wide · core sample", "early_exits": 6, "late_exits": 3, "h3_p": 0.2}], "run": {}})
+    assert b.startswith("AEM ACCOUNTING v23") and "FILES     files 63 · cached 0 · downloaded 62 · missing 1" in b and "FILES     not read: 2026q3" in b
+    assert "COVERAGE  locked dates · accruals 93% · f score 71%" in b and "F-SCORE   windows by score · 3: 1,200 · 7: 5,400" in b
+    assert "ACC       target 3x within 3 years · candidate accruals · holdout lr 1.20" in b
+    assert "COMBO     combination fallen with an F-score of 7 to 9" in b and "EXIT      ELLIE MAE INC" in b
+    assert "A-H3      measure hand-read exits, wide · core sample · early exits 6 · late exits 3 · h3 p 0.20" in b

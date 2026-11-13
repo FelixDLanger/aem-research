@@ -508,3 +508,50 @@ def exit_lines(deals: pd.DataFrame, validated: pd.DataFrame, chosen: pd.DataFram
             lines.append(f"REIPO {i:02d} {str(r.target_name)[:40]} (completed {pd.Timestamp(r.completion_date).date() if pd.notna(r.completion_date) else 'n/a'}) "
                          f"→ {str(getattr(r, 'reipo_company', ''))[:40]} · {getattr(r, 'reipo_form', '')} · {pd.Timestamp(r.reipo_date).date()}")
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Read by hand (Nov 13, 2026). Notebook 10 printed every sale its rule kept and every re-IPO
+# match of notebook 02. Claude read the 24 sale sentences and the 14 re-IPO matches and
+# judged each from the sentence and from what is publicly known of the deal – not by opening
+# each filing in full. 7 of the 24 sales and 5 to 6 of the 14 re-IPO matches are exits of the
+# company that was taken private. "strict" leaves out the cases a reader could argue with.
+# ---------------------------------------------------------------------------
+
+VERIFIED_SALES = {
+    "ACTIVE NETWORK INC": ("strict", "Global Payments bought the communities and sports divisions from Vista Equity (2017)"),
+    "DIAMOND RESORTS INTERNATIONAL, INC.": ("strict", "Hilton Grand Vacations bought the company from Apollo (2021)"),
+    "BLACKWATER MIDSTREAM CORP.": ("strict", "American Midstream Partners bought Blackwater Midstream Holdings (2013)"),
+    "ELLIE MAE INC": ("strict", "Intercontinental Exchange bought the company from Thoma Bravo (2020)"),
+    "BENIHANA INC": ("strict", "The ONE Group bought the company (2024)"),
+    "PLY GEM HOLDINGS INC": ("wide", "combined with NCI Building Systems months after Clayton, Dubilier & Rice took it private (2018)"),
+    "STEINER LEISURE LTD": ("wide", "its spa business listed as OneSpaWorld through a merger with a listed shell (2019)"),
+}
+VERIFIED_REIPOS = {
+    "GARDNER DENVER INC": ("strict", "initial public offering in 2017"),
+    "SOLARWINDS, INC.": ("strict", "initial public offering in 2018"),
+    "INSTRUCTURE INC": ("strict", "initial public offering in 2021"),
+    "INFORMATICA CORP": ("strict", "initial public offering in 2021"),
+    "ASPEN INSURANCE HOLDINGS LTD": ("strict", "initial public offering in 2025"),
+    "TALEN ENERGY CORP": ("wide", "listed again after its bankruptcy, not a sponsor's offering (2024)"),
+}
+REJECTED_REIPOS = ("INTERLINE BRANDS, INC./DE", "DOLE FOOD CO INC", "FRESH MARKET, INC.", "STEINWAY MUSICAL INSTRUMENTS INC",
+                   "EOS ENERGY ENTERPRISES, INC.", "FIDELITY & GUARANTY LIFE", "EMPIRE DISTRICT ELECTRIC CO", "AEON BIOPHARMA, INC.")
+
+
+def with_verified_exits(sample: pd.DataFrame, chosen: pd.DataFrame, *, level: str = "wide") -> tuple[pd.DataFrame, dict]:
+    """The analysis sample with only the exits read and accepted by hand. `level` "strict"
+    keeps the undisputed ones, "wide" all accepted ones."""
+    ok = (lambda v: v[0] == "strict") if level == "strict" else (lambda v: True)
+    names = sample["target_name"].astype(str).str.strip().str.upper()
+    sales = {k.upper() for k, v in VERIFIED_SALES.items() if ok(v)}
+    reipos = {k.upper() for k, v in VERIFIED_REIPOS.items() if ok(v)}
+    keep_ids = set(sample.loc[names.isin(sales), "deal_id"])
+    c = chosen[chosen["deal_id"].isin(keep_ids)] if len(chosen) else chosen
+    s = sample.copy()
+    if "reipo_date" in s.columns:
+        s["reipo_date"] = pd.to_datetime(s["reipo_date"]).where(names.isin(reipos))
+    out = with_checked_exits(s, c, tiers=("A", "B"), use_reipo=True)
+    counts = {"level": level, "sales_in_sample": int(len(c)), "re_ipos_in_sample": int(out["reipo_date"].notna().sum()) if "reipo_date" in out.columns else 0,
+              "exits_counted": int(out["exit_event"].sum()), "accepted_sales_listed": len(sales), "accepted_re_ipos_listed": len(reipos)}
+    return out, counts

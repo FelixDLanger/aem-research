@@ -405,14 +405,16 @@ def _side(g: pd.DataFrame, sig: str, end: str, resamples: int, seed: int) -> dic
             "at_least_3x": float((in_ >= 3).mean()), "at_least_3x_rest": float((out >= 3).mean()), "shape": shape}
 
 
-def asymmetry(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, resamples: int = 500, seed: int = 20261106) -> pd.DataFrame:
+def asymmetry(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, resamples: int = 500, seed: int = 20261106,
+              combos=None, build=None) -> pd.DataFrame:
     """Every combination on three samples: five-year end multiples on start dates to 2017 and
     from 2018, two-year end multiples on the new dates. `verdict` is the shape that both
     five-year samples agree on (the new dates are shown beside it)."""
-    x = with_combos(w, panel)
-    xn = with_combos(w_new, panel) if w_new is not None and len(w_new) else None
+    build = build or with_combos
+    x = build(w, panel)
+    xn = build(w_new, panel) if w_new is not None and len(w_new) else None
     rows = []
-    for name, col in COMBOS:
+    for name, col in (combos if combos is not None else COMBOS):
         if col not in x.columns:
             continue
         parts = [("to 2017, five years", x[x["start_year"] <= DISCOVERY_TO], "end5"),
@@ -430,21 +432,24 @@ def asymmetry(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None,
     return pd.DataFrame(rows)
 
 
-def outcome_model(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, seed: int = 20261106) -> pd.DataFrame:
+def outcome_model(w: pd.DataFrame, w_new: pd.DataFrame | None = None, *, panel=None, seed: int = 20261106,
+                  extra_continuous=(), extra_flags=(), build=None) -> pd.DataFrame:
     """The flexible version: gradient-boosted trees predict the log end multiple from all
     measures of both batches (fitted on start dates to 2017). Scored out of time by what the best-ranked and
     the worst-ranked tenth of windows actually ended at."""
     from sklearn.ensemble import HistGradientBoostingRegressor
 
-    x = with_combos(w, panel)
-    xn = with_combos(w_new, panel) if w_new is not None and len(w_new) else None
+    build = build or with_combos
+    x = build(w, panel)
+    xn = build(w_new, panel) if w_new is not None and len(w_new) else None
+    ranked = (*CONTINUOUS, *LIT_CONTINUOUS, *extra_continuous)
     base = ("fcf_pos", "net_cash_pos", "low_dilution", "s1_proxy", "insider_any", "insider_cluster", "insider_opportunistic",
             "insider_post_results_cluster", "low_attention", "fallen")
-    cols = [c for c in (*CONTINUOUS, *LIT_CONTINUOUS, *FLAGS, *LIT_FLAGS, *base) if c in x.columns]
+    cols = [c for c in (*ranked, *FLAGS, *LIT_FLAGS, *extra_flags, *base) if c in x.columns]
 
     def matrix(f):
         m = pd.DataFrame({c: (est._flag(f[c]) if c in base else pd.to_numeric(f[c], errors="coerce")) for c in cols})
-        for c in (*CONTINUOUS, *LIT_CONTINUOUS):
+        for c in ranked:
             if c in m.columns:
                 m[c] = m[c].groupby(f["start_date"].to_numpy()).rank(pct=True)
         return m

@@ -74,6 +74,7 @@ NOTEBOOK_E = ROOT / "notebooks" / "07_estimates.ipynb"
 NOTEBOOK_F = ROOT / "notebooks" / "08_followup.ipynb"
 NOTEBOOK_Z = ROOT / "notebooks" / "09_exits.ipynb"
 NOTEBOOK_L = ROOT / "notebooks" / "10_final.ipynb"
+NOTEBOOK_C = ROOT / "notebooks" / "11_accounting.ipynb"
 
 
 def test_diagnostic_notebook_is_valid_and_reads_only():
@@ -95,7 +96,7 @@ def test_notebooks_match_their_builders(tmp_path):
     import sys
     for builder, nb in (("build_notebook.py", NOTEBOOK), ("build_notebook_paper_a.py", NOTEBOOK_A),
                         ("build_notebook_diag.py", NOTEBOOK_D), ("build_notebook_results.py", NOTEBOOK_R),
-                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X), ("build_notebook_estimates.py", NOTEBOOK_E), ("build_notebook_followup.py", NOTEBOOK_F), ("build_notebook_exits.py", NOTEBOOK_Z), ("build_notebook_final.py", NOTEBOOK_L)):
+                        ("build_notebook_paper_a_results.py", NOTEBOOK_AR), ("build_notebook_explore.py", NOTEBOOK_X), ("build_notebook_estimates.py", NOTEBOOK_E), ("build_notebook_followup.py", NOTEBOOK_F), ("build_notebook_exits.py", NOTEBOOK_Z), ("build_notebook_final.py", NOTEBOOK_L), ("build_notebook_accounting.py", NOTEBOOK_C)):
         out = tmp_path / nb.name
         subprocess.run([sys.executable, str(ROOT / "tools" / builder), str(out)], check=True, capture_output=True)
         assert out.read_text(encoding="utf-8") == nb.read_text(encoding="utf-8"), f"{nb.name} is stale: rebuild it"
@@ -103,7 +104,7 @@ def test_notebooks_match_their_builders(tmp_path):
 
 def test_every_notebook_is_stamped_and_checks_its_stamp(tmp_path):
     from aem_research import env
-    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X, NOTEBOOK_E, NOTEBOOK_F, NOTEBOOK_Z, NOTEBOOK_L):
+    for nb_path in (NOTEBOOK, NOTEBOOK_A, NOTEBOOK_D, NOTEBOOK_R, NOTEBOOK_AR, NOTEBOOK_X, NOTEBOOK_E, NOTEBOOK_F, NOTEBOOK_Z, NOTEBOOK_L, NOTEBOOK_C):
         stamp = env.notebook_build(nb_path)
         assert stamp and re.fullmatch(r"[0-9a-f]{12}", stamp), nb_path.name
         setup = "".join(next(c for c in json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
@@ -122,7 +123,7 @@ def test_every_notebook_and_the_readme_carry_the_current_release(tmp_path):
     from aem_research import env
     rel = aem_research.RELEASE
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X), ("07", NOTEBOOK_E), ("08", NOTEBOOK_F), ("09", NOTEBOOK_Z), ("10", NOTEBOOK_L)):
+    for num, nb_path in (("01", NOTEBOOK), ("02", NOTEBOOK_A), ("03", NOTEBOOK_D), ("04", NOTEBOOK_R), ("05", NOTEBOOK_AR), ("06", NOTEBOOK_X), ("07", NOTEBOOK_E), ("08", NOTEBOOK_F), ("09", NOTEBOOK_Z), ("10", NOTEBOOK_L), ("11", NOTEBOOK_C)):
         assert env.notebook_release(nb_path) == rel, nb_path.name
         cells = json.loads(nb_path.read_text(encoding="utf-8"))["cells"]
         title = "".join(cells[0]["source"]).splitlines()[0]
@@ -235,3 +236,14 @@ def test_exits_notebook_checks_both_locks_and_writes_only_its_own_tables():
     assert "if not problems:" in codes[read] and "pxe.reading_sample(" in codes[read]
     saved = re.findall(r"save_table\([^,]+, A_DIR / \"([a-z_]+)\"\)", joined)
     assert saved == ["wsib_funds_full"]                       # notebook 02's wsib_funds and deals are never written
+
+
+def test_accounting_notebook_keeps_its_download_apart_from_the_data_runs_files():
+    nb = json.loads(NOTEBOOK_C.read_text(encoding="utf-8"))
+    joined = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    assert "accounting.load_extra(" in joined and "fsds.load(" not in joined          # the data run's extract is never rebuilt
+    from aem_research import accounting
+    from aem_research.data import fsds
+    assert not set(accounting.EXTRA_TAGS) & set(fsds.TAGS) and accounting.EXTRA_SCHEMA != fsds.SCHEMA
+    saved = re.findall(r"save_table\([^,]+, paths\.cache / \"([a-z_]+)\"\)", joined)
+    assert saved == ["accounting_snapshots"]

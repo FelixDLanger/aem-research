@@ -163,3 +163,22 @@ def test_every_hit_is_read_the_best_one_chosen_and_the_sample_recomputed(tmp_pat
     lines = pxe.exit_lines(d, out, c.reset_index())
     assert lines[0].startswith("SALE 01 tier A · ACME WIDGETS INC (Thoma Bravo) → Buyer One") and "acquisition of Acme Widgets" in lines[0]
     assert lines[1].startswith("SALE 02 tier B") and any(x.startswith("REJECTED 01 GAMMA FOODS INC") for x in lines)
+
+
+def test_only_exits_accepted_by_hand_count_and_strict_is_a_subset_of_wide():
+    sample = pd.DataFrame({
+        "deal_id": ["a", "b", "c", "d", "e"],
+        "target_name": ["ELLIE MAE INC", "PLY GEM HOLDINGS INC", "NORDSTROM INC", "GARDNER DENVER INC", "DOLE FOOD CO INC"],
+        "completion_date": pd.to_datetime(["2019-04-17", "2018-04-12", "2019-01-01", "2013-07-25", "2013-10-31"]),
+        "reipo_date": pd.to_datetime([None, None, None, "2017-02-28", "2017-04-24"]), "group": "core", "cohort": "",
+        "exit_event": [True, True, True, True, True], "exit_years": [1.4, 0.6, 2.0, 3.6, 3.5]})
+    sample.loc[5] = ["f", "QUIET CO", pd.Timestamp("2016-01-01"), pd.NaT, "core", "", False, 10.0]      # censored: gives the as-of date
+    chosen = pd.DataFrame({"deal_id": ["a", "b", "c"], "sale_date_checked": pd.to_datetime(["2020-09-04", "2018-11-20", "2021-01-01"]),
+                           "buyer_checked": ["ICE", "NCI", "X"], "tier": ["B", "A", "B"]})
+    wide, cw = pxe.with_verified_exits(sample, chosen, level="wide")
+    assert wide["exit_event"].tolist() == [True, True, False, True, False, False]       # Nordstrom's match and Dole's filing are not exits
+    assert cw["sales_in_sample"] == 2 and cw["re_ipos_in_sample"] == 1 and cw["exits_counted"] == 3
+    strict, cs = pxe.with_verified_exits(sample, chosen, level="strict")
+    assert strict["exit_event"].tolist() == [True, False, False, True, False, False] and cs["exits_counted"] == 2
+    assert set(k for k, v in pxe.VERIFIED_SALES.items() if v[0] == "strict") < set(pxe.VERIFIED_SALES)
+    assert not set(pxe.REJECTED_REIPOS) & set(pxe.VERIFIED_REIPOS)

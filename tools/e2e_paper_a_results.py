@@ -231,4 +231,40 @@ assert "cached 1 · read 0" in run_final(SCRATCH / "repo_explore")
 block = run_final(repo_copy("final_unlocked", None, IDENTITY_B))
 assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and "SALE" not in block and "COMBO" not in block
 
-print(f"\nNOTEBOOKS 05, 06, 09 AND 10 OK in all cases ({time.time() - t0:.0f}s)")
+
+
+# ---- notebook 11: the extra statement lines read from the synthetic quarterly files, offline
+SEC_DIR = DRIVE / "aem-research" / "data" / "sec"
+fs_before = {p_.name: p_.stat().st_mtime_ns for p_ in (SEC_DIR / "fsds").iterdir()}
+
+
+def run_accounting(repo: Path) -> str:
+    for f in ("accounting.txt", "aem_accounting.xlsx"):
+        (OUTPUT / f).unlink(missing_ok=True)
+    os.environ.update(AEM_DRIVE_ROOT=str(DRIVE), AEM_REPO_DIR=str(repo), AEM_SEC_OFFLINE="1")
+    nb = json.loads((repo / "notebooks" / "11_accounting.ipynb").read_text(encoding="utf-8"))
+    ns = {"__name__": "__main__"}
+    for i, cell in enumerate(c for c in nb["cells"] if c["cell_type"] == "code"):
+        exec(compile("".join(cell["source"]), f"cell-{i}", "exec"), ns)
+    return (OUTPUT / "accounting.txt").read_text(encoding="utf-8")
+
+
+block = run_accounting(SCRATCH / "repo_explore")
+print(block)
+assert block.startswith("AEM ACCOUNTING v") and "CHECKS    locks ok · data runs ok" in block and "ERRORS    none" in block
+for label in ("FILES     user agent offline · files ", "LINES     ", "COVERAGE  locked dates · accruals ", "F-SCORE   windows by score",
+              "SCAN 3    exploratory, third batch, same rule · tested ", "ACC       target 3x within 3 years · candidate accruals",
+              "COMBO     combination fallen with an F-score of 7 to 9", "OUTCOME   sample from 2018, five years · group best-ranked tenth",
+              "EXITS     read by hand · level wide", "A-H3      measure hand-read exits, wide · core sample",
+              "A-H3      measure hand-read exits, strict · all deals"):
+    assert label in block, label
+import re as _re  # noqa: E402
+cov = float(_re.search(r"COVERAGE  locked dates · accruals (\d+)%", block).group(1))
+assert cov >= 80, cov                                           # the synthetic statements carry the extra lines
+assert all((SEC_DIR / "fsds" / k).stat().st_mtime_ns == v for k, v in fs_before.items()), "the data run's statement extract was rewritten"
+assert any(p_.name.startswith("fsdsx_") for p_ in (SEC_DIR / "fsds_extra").iterdir())
+assert "cached " in run_accounting(SCRATCH / "repo_explore") and "downloaded 0" in (OUTPUT / "accounting.txt").read_text(encoding="utf-8")
+block = run_accounting(repo_copy("accounting_unlocked", None, IDENTITY_B))
+assert "CHECKS    STOPPED – Paper A: the pre-registration is not locked" in block and "ACC  " not in block and "A-H3" not in block
+
+print(f"\nNOTEBOOKS 05, 06, 09, 10 AND 11 OK in all cases ({time.time() - t0:.0f}s)")

@@ -519,6 +519,43 @@ def final_block(report: dict) -> str:
     return "\n".join(lines)
 
 
+def accounting_block(report: dict) -> str:
+    """Notebook 11's paste block: the third batch (accounting measures) and A-H3 on the hand-read exits."""
+    r = report
+    v_ = f"v{r['release']}" if r.get("release") is not None else "v?"
+    lines = [f"AEM ACCOUNTING {v_} – paste everything between the rulers into the chat", "=" * 72,
+             f"{v_} · run {r.get('generated_utc', '')} · repo {r.get('repo_commit', '')} · notebook "
+             f"{r.get('notebook_build', 'n/a')} · Paper A {r.get('lock_status_a', '')} · Paper B {r.get('lock_status_b', '')}"]
+    problems = r.get("problems") or []
+    lines.append("CHECKS    " + ("locks ok · data runs ok" if not problems else "STOPPED – " + " | ".join(problems)))
+    if r.get("statements"):
+        lines.append("FILES     " + _items(r["statements"]))
+        lines.append("FILES     not read: " + str(r.get("statement_gaps", "none")))
+        lines.append("LINES     " + _items(r.get("statement_groups") or {}))
+    for label, key in (("COVERAGE  locked dates · ", "coverage"), ("COVERAGE  new dates · ", "coverage_new")):
+        if r.get(key):
+            lines.append(label + " · ".join(f"{k.replace('_', ' ')} {float(v):.0%}" for k, v in r[key].items()))
+    if r.get("f_score"):
+        lines.append("F-SCORE   windows by score · " + " · ".join(f"{k}: {v:,}" for k, v in r["f_score"].items()))
+    if r.get("scan_counts"):
+        lines.append("SCAN 3    exploratory, third batch, same rule · " + _items(r["scan_counts"]))
+    for row in r.get("scan") or []:
+        lines.append("ACC       " + _kv(row))
+    for row in r.get("combinations") or []:
+        lines.append("COMBO     " + _kv(row))
+    for row in r.get("outcome_model") or []:
+        lines.append("OUTCOME   " + _kv(row))
+    for c in r.get("h3_counts") or []:
+        lines.append("EXITS     read by hand · " + _items(c))
+    for line in r.get("verified_exits") or []:
+        lines.append("EXIT      " + line)
+    for row in r.get("h3") or []:
+        lines.append("A-H3      " + _kv(row))
+    lines += _run_lines(r)
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Paper B's H2 to H6 (notebook 07)
 # ---------------------------------------------------------------------------
