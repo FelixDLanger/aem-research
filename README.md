@@ -1,6 +1,11 @@
 # aem-research
 
-Base rates for extreme multiples in US small caps, and whether the AEM screening signals carry information. Empirical code for the AEM paper (Paper B) and, from the same data layer, the take-private sample for Paper A on regime-conditional value creation in buyouts.
+Base rates for extreme multiples in US small caps, and whether the signals of the Asymmetric Evaluation Matrix (AEM) carry information. Code, pre-registrations and lock files for two working papers:
+
+- **Paper B** – *Winners and Wipe-outs Come From the Same Pool: Pre-Registered Evidence on Multibaggers, Losses and the AEM Framework in US Small Caps.*
+- **Paper A** – *What Sponsors Pay: Entry Premiums, Target Selection and the Public Holder in US Take-Privates, 2012–2026*, built on the same data layer.
+
+The papers cite release **v23** (commit `fe00d07`). The locked configuration files in `config/` keep the working names in use when they were locked ("AEM-2 v2.6" for the original AEM, "terminal" for the framework the results feed); a locked file cannot be edited without breaking its hash.
 
 [Open notebook 01 · v23 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/01_aem_base_rate_skeleton.ipynb) – the AEM base-rate study (run first)
 [Open notebook 02 · v23 in Colab](https://colab.research.google.com/github/FelixDLanger/aem-research/blob/main/notebooks/02_paper_a_take_private_sample.ipynb) – Paper A's take-private sample (runs on notebook 01's caches)
@@ -23,16 +28,16 @@ Base rates for extreme multiples in US small caps, and whether the AEM screening
 
 The version (v23) is in each notebook's title and in the first line of its paste block. When a message asks for a new run, it names the version; a copy that is still open from an earlier version stops at setup and says which one to open.
 
-## Design at a glance (pre-registration v0.3, draft)
+## Design at a glance (pre-registration, locked November 10, 2026)
 
 - **Prices (D10):** every price the primary analysis uses comes from SEC filings – quarter-end prices from Form 13F (market value over shares held, median across at least three filers), the SEC fails-to-deliver files where 13F has none, and splits found from the filings' restated history (later 10-Qs and 10-Ks restate past share counts by exactly the split ratio), the holders' share counts and CUSIP changes. A reverse split whose ratio no evidence gives is neutralized, so it can never count as a gain. Companies that later delisted are priced exactly like the survivors, and the published numbers rest on public data only. Robustness B keeps daily SimFin and Stooq closes and fills only the companies they never priced.
-- **Universe:** US exchange-listed common stocks with market cap US$100m–2bn (AEM-2 v2.6), price at least US$1, liquid (a minimum number of 13F holders, calibrated on the US$100k median dollar-volume screen), filing 10-K and 10-Q reports with XBRL financials, no SPAC shells.
-- **Formation dates:** the first trading day of January, April, July and October, 2013–2023 (quarterly confirmed Nov 6, 2026; January alone is the AEM-2 v2.6 robustness check). Smaller companies tagged XBRL financials from mid-2011, so trailing free cash flow is known from filings for every company from January 2013; the SEC price panel starts in July 2013, the first start date with usable 13F holdings.
+- **Universe:** US exchange-listed common stocks with market cap US$100m–2bn (the original AEM's size range), price at least US$1, liquid (a minimum number of 13F holders, calibrated on the US$100k median dollar-volume screen), filing 10-K and 10-Q reports with XBRL financials, no SPAC shells.
+- **Formation dates:** the first trading day of January, April, July and October, 2013–2023 (quarterly confirmed Nov 6, 2026; January alone is a robustness check). Smaller companies tagged XBRL financials from mid-2011, so trailing free cash flow is known from filings for every company from January 2013; the SEC price panel starts in July 2013, the first start date with usable 13F holdings.
 - **Outcomes:** touching 2x to 100x within 3, 5 and 10 years – at a quarter-end close in the primary analysis, at a daily close in robustness B; the ratio between the two is measured on 2009–2012 start dates, outside the sample – and the five-year end multiple on the six-bucket grid. A series that stops takes a delisting return – Shumway (1997): -30% on NYSE and NYSE American, Shumway and Warther (1999): -55% on Nasdaq, 0% for mergers – always with bounds.
-- **Hypotheses:** H1 base rates; H2 the fallen-quality cohort, tested with any insider purchase (H2a) and with opportunistic insiders only (H2b, Cohen, Malloy and Pomorski 2012); H3 the horizon conversion 3x/3y = 6.24x/5y; H4 likelihood ratios for the AEM-2 v2.6 signals, plus a checklist benchmark; H5 regime; H6 post-results insider clusters.
+- **Hypotheses:** H1 base rates; H2 the fallen-quality cohort, tested with any insider purchase (H2a) and with opportunistic insiders only (H2b, Cohen, Malloy and Pomorski 2012); H3 the horizon conversion 3x/3y = 6.24x/5y; H4 likelihood ratios for the original AEM signals, plus a checklist benchmark; H5 regime; H6 post-results insider clusters.
 - **Regime:** the 2022 split is primary; six exploratory moderators from FRED and the universe itself (real yield, tightening, credit spread, CPI inflation, market stress, starting valuation), measured on each start date and shared with Paper A. A regime difference found in the locked sample is tested once, in late 2028, on start dates added after the lock (D8).
 - **Falsification and power:** an insider-sale placebo for H2, and the smallest detectable likelihood ratio per cohort before the lock.
-- **Discovery:** the lock fixes what is tested, not what may be learned. Unplanned findings are welcome, reported as exploratory with every analysis tried, and earn weight in the screening terminal once they hold on data they were not found in (D9).
+- **Discovery:** the lock fixes what is tested, not what may be learned. Unplanned findings are welcome, reported as exploratory with every analysis tried, and earn weight in the framework once they hold on data they were not found in (D9).
 - **Point in time:** every feature is used only after its filing date; a guard rejects the features otherwise. Size and price filters undo later split adjustments with 13F implied prices.
 
 ## What is here
@@ -58,7 +63,7 @@ The version (v23) is in each notebook's title and in the first line of its paste
 | `aem_research/export.py`, `runlog.py` | Excel workbook of every table; per-phase status, timings and errors |
 | `aem_research/guards.py` | Look-ahead and survivorship guards that fail loudly |
 | `notebooks/01_aem_base_rate_skeleton.ipynb` | Colab notebook: setup, tests, coverage audit, verdict, features, regime, Excel export, locked outcome phase, run summary |
-| `config/paper_a.yaml` | Paper A's draft pre-registration (decisions A1–A3, sample, entry and exit rules, draft hypotheses); `config/paper_a_LOCK.json` locks it |
+| `config/paper_a.yaml` | Paper A's pre-registration (decisions, sample, entry and exit rules, hypotheses A-H1 to A-H3); `config/paper_a_LOCK.json` locks it |
 | `aem_research/data/fts.py` | EDGAR full-text search: phrase search across every filing since 2001, cached per year on Drive |
 | `aem_research/takeprivate.py` | Paper A: take-private deals, completion, terms from the merger documents, entry EBITDA and enterprise value, exit routes, public benchmark multiples |
 | `aem_research/data/wsib.py` | Washington State Investment Board's quarterly private equity table, fund by fund |
@@ -116,6 +121,13 @@ The code is licensed under the GNU Affero General Public License v3.0 (`LICENSE`
 
 ## Status
 
-Built and tested: config lock with review gate; the SEC price panel with split detection and its validation (D10); SimFin and Stooq readers; SEC index (Form 25, merger filings); the three SEC data sets and the fails-to-deliver files; point-in-time fundamentals, insider signals and attention; universe, cohort, placebo and signal flags; delisting classification; FRED regime moderators; power table; coverage audit with the EODHD verdict; outcome engine; guards; Excel export; run log with a paste-ready summary.
-Paper A (notebook 02): take-private sample, terms, entry EBITDA and enterprise value, exit-route detection, public benchmark, WSIB fund table – counts only until Paper A's lock.
-Next: the estimators – likelihood ratios with firm-cluster bootstrap and Holm correction, the ordered logit and the 10x logit, the checklist benchmark; for Paper A, reading the 30 seeded deals and the cross-check's disagreements, its hypotheses and lock, then exit values and the value bridge.
+Complete as of release v23 (November 13, 2026). The research phase is closed.
+
+- **Paper B:** pre-registration locked November 10, 2026 (`config/LOCK.json`); H1 to H6 and the models in notebooks 04 and 07; robustness, the confirmation on new start dates (`config/confirmation.yaml`, locked November 11) and price basis B in notebook 08; three exploratory batches (249 tests), 39 combinations and the out-of-time model in notebooks 09 to 11.
+- **Paper A:** pre-registration locked November 11, 2026 (`config/paper_a_LOCK.json`); the three confirmatory tests and the exploratory tables in notebooks 05 and 06; the exit measure, its failed reading check and the hand-read exits in notebooks 09 to 11.
+
+## How to cite
+
+Langer, F. D. (2026). *aem-research* (release v23) [Computer software]. https://github.com/FelixDLanger/aem-research
+
+See `CITATION.cff`. Nothing in this repository is investment advice.

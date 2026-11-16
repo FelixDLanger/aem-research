@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this code, please cite it as below."
-title: "aem-research: base rates for extreme multiples in US small caps"
+title: "aem-research: base rates for extreme multiples in US small caps and entry pricing in US take-privates"
 type: software
 authors:
   - family-names: Langer
@@ -8,5 +8,6 @@ authors:
     orcid: "https://orcid.org/0009-0000-3205-8088"
 repository-code: "https://github.com/FelixDLanger/aem-research"
 license: AGPL-3.0
-version: 0.4.0
-date-released: "2026-11-09"
+version: "v23"
+commit: fe00d074497022909f8a1253a7fa2b446712fb23
+date-released: "2026-11-13"
