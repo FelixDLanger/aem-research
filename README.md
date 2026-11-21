@@ -2,7 +2,7 @@
 
 Base rates for extreme multiples in US small caps, and whether the signals of the Asymmetric Evaluation Matrix (AEM) carry information. Code, pre-registrations and lock files for two working papers:
 
-- **Paper B** – *Winners and Wipe-outs Come From the Same Pool: Pre-Registered Evidence on Multibaggers, Losses and the AEM Framework in US Small Caps.*
+- **Paper B** – *Extreme Gains and Extreme Losses Share the Same Predictors: Pre-Registered Evidence from US Small-Cap Stocks.*
 - **Paper A** – *What Sponsors Pay: Entry Premiums, Target Selection and the Public Holder in US Take-Privates, 2012–2026*, built on the same data layer.
 
 The papers cite release **v23** (commit `fe00d07`). The locked configuration files in `config/` keep the working names in use when they were locked ("AEM-2 v2.6" for the original AEM, "terminal" for the framework the results feed); a locked file cannot be edited without breaking its hash.
